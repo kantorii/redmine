@@ -78,6 +78,7 @@ Available IMAP options:
   host=HOST                IMAP server host (default: 127.0.0.1)
   port=PORT                IMAP server port (default: 143)
   ssl=SSL                  Use SSL? (default: false)
+  tls=TLS                  Use TLS? (default: false)
   username=USERNAME        IMAP account
   password=PASSWORD        IMAP password
   folder=FOLDER            IMAP folder to read (default: INBOX)
@@ -118,6 +119,7 @@ END_DESC
       imap_options = {:host => ENV['host'],
                       :port => ENV['port'],
                       :ssl => ENV['ssl'],
+                      :tls => ENV['tls'],
                       :username => ENV['username'],
                       :password => ENV['password'],
                       :folder => ENV['folder'],
