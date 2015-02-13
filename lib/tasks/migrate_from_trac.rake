@@ -75,13 +75,27 @@ namespace :redmine do
           def now
             real_now - @fake_diff.to_i
           end
+
           def fake(time)
             @fake_diff = real_now - time
             res = yield
             @fake_diff = 0
            res
           end
+
+          def at2(time)
+            # modified from http://www.redmine.org/issues/14567#note-12
+            if TracMigrate.database_version > 22
+              Time.at(0, time)
+            else
+              Time.at(time)
+            end
+          end
         end
+      end
+
+      class TracSystem < ActiveRecord::Base
+        self.table_name = :system
       end
 
       class TracComponent < ActiveRecord::Base
@@ -93,7 +107,7 @@ namespace :redmine do
         # If this attribute is set a milestone has a defined target timepoint
         def due
           if read_attribute(:due) && read_attribute(:due) > 0
-            Time.at(read_attribute(:due)).to_date
+            Time.at2(read_attribute(:due)).to_date
           else
             nil
           end
@@ -101,7 +115,7 @@ namespace :redmine do
         # This is the real timepoint at which the milestone has finished.
         def completed
           if read_attribute(:completed) && read_attribute(:completed) > 0
-            Time.at(read_attribute(:completed)).to_date
+            Time.at2(read_attribute(:completed)).to_date
           else
             nil
           end
@@ -121,7 +135,7 @@ namespace :redmine do
         self.table_name = :attachment
         set_inheritance_column :none
 
-        def time; Time.at(read_attribute(:time)) end
+        def time; Time.at2(read_attribute(:time)) end
 
         def original_filename
           filename
@@ -186,8 +200,8 @@ namespace :redmine do
           read_attribute(:description).blank? ? summary : read_attribute(:description)
         end
 
-        def time; Time.at(read_attribute(:time)) end
-        def changetime; Time.at(read_attribute(:changetime)) end
+        def time; Time.at2(read_attribute(:time)) end
+        def changetime; Time.at2(read_attribute(:changetime)) end
       end
 
       class TracTicketChange < ActiveRecord::Base
@@ -198,7 +212,7 @@ namespace :redmine do
           super.select {|column| column.name.to_s != 'field'}
         end
 
-        def time; Time.at(read_attribute(:time)) end
+        def time; Time.at2(read_attribute(:time)) end
       end
 
       TRAC_WIKI_PAGES = %w(InterMapTxt InterTrac InterWiki RecentChanges SandBox TracAccessibility TracAdmin TracBackup TracBrowser TracCgi TracChangeset \
@@ -222,7 +236,7 @@ namespace :redmine do
           TracMigrate::TracAttachment.all(:conditions => ["type = 'wiki' AND id = ?", self.id.to_s])
         end
 
-        def time; Time.at(read_attribute(:time)) end
+        def time; Time.at2(read_attribute(:time)) end
       end
 
       class TracPermission < ActiveRecord::Base
@@ -377,6 +391,9 @@ namespace :redmine do
         # Quick database test
         TracComponent.count
 
+        lookup_database_version
+        print "Trac database version is: ", database_version, "\n"
+
         migrated_components = 0
         migrated_milestones = 0
         migrated_tickets = 0
@@ -473,7 +490,8 @@ namespace :redmine do
                           :subject => encode(ticket.summary[0, limit_for(Issue, 'subject')]),
                           :description => convert_wiki_text(encode(ticket.description)),
                           :priority => PRIORITY_MAPPING[ticket.priority] || DEFAULT_PRIORITY,
-                          :created_on => ticket.time
+                          :created_on => ticket.time,
+                          :updated_on => ticket.changetime
           i.author = find_or_create_user(ticket.reporter)
           i.category = issues_category_map[ticket.component] unless ticket.component.blank?
           i.fixed_version = version_map[ticket.milestone] unless ticket.milestone.blank?
@@ -608,6 +626,15 @@ namespace :redmine do
 
       def self.encoding(charset)
         @charset = charset
+      end
+
+      def self.lookup_database_version
+        f = TracSystem.find_by_name("database_version")
+        @@database_version = f.value.to_i
+      end
+
+      def self.database_version
+        @@database_version
       end
 
       def self.set_trac_directory(path)
