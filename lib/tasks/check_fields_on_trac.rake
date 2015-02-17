@@ -20,54 +20,11 @@ require 'iconv' if RUBY_VERSION < '1.9'
 require 'pp'
 
 namespace :redmine do
-  desc 'Trac migration script'
-  task :migrate_from_trac => :environment do
+  desc 'Script to check values of fields on Trac'
+  task :check_fields_on_trac => :environment do
 
-    module TracMigrate
+    module TracFieldCheck
         TICKET_MAP = []
-
-        DEFAULT_STATUS = IssueStatus.default
-        assigned_status = IssueStatus.find_by_position(2)
-        resolved_status = IssueStatus.find_by_position(3)
-        feedback_status = IssueStatus.find_by_position(4)
-        closed_status = IssueStatus.where(:is_closed => true).first
-        STATUS_MAPPING = {'new' => DEFAULT_STATUS,
-                          'reopened' => feedback_status,
-                          'assigned' => assigned_status,
-                          'closed' => closed_status
-                          }
-
-        priorities = IssuePriority.all
-        DEFAULT_PRIORITY = priorities[0]
-        PRIORITY_MAPPING = {'lowest' => priorities[0],
-                            'low' => priorities[0],
-                            'normal' => priorities[1],
-                            'high' => priorities[2],
-                            'highest' => priorities[3],
-                            # ---
-                            'trivial' => priorities[0],
-                            'minor' => priorities[1],
-                            'major' => priorities[2],
-                            'critical' => priorities[3],
-                            'blocker' => priorities[4]
-                            }
-
-        TRACKER_BUG = Tracker.find_by_position(1)
-        TRACKER_FEATURE = Tracker.find_by_position(2)
-        DEFAULT_TRACKER = TRACKER_BUG
-        TRACKER_MAPPING = {'defect' => TRACKER_BUG,
-                           'enhancement' => TRACKER_FEATURE,
-                           'task' => TRACKER_FEATURE,
-                           'patch' =>TRACKER_FEATURE
-                           }
-
-        roles = Role.where(:builtin => 0).order('position ASC').all
-        manager_role = roles[0]
-        developer_role = roles[1]
-        DEFAULT_ROLE = roles.last
-        ROLE_MAPPING = {'admin' => manager_role,
-                        'developer' => developer_role
-                        }
 
       class ::Time
         class << self
@@ -85,7 +42,7 @@ namespace :redmine do
 
           def at2(time)
             # modified from http://www.redmine.org/issues/14567#note-12
-            if TracMigrate.database_version > 22
+            if TracFieldCheck.database_version > 22
               Time.at(0, time)
             else
               Time.at(time)
@@ -172,7 +129,7 @@ namespace :redmine do
             codepoint = RUBY_VERSION < '1.9' ? x[0] : x.codepoints.to_a[0]
             sprintf('%%%02x', codepoint)
           end
-          "#{TracMigrate.trac_attachments_directory}/#{attachment_type}/#{id}/#{trac_file}"
+          "#{TracFieldCheck.trac_attachments_directory}/#{attachment_type}/#{id}/#{trac_file}"
         end
       end
 
@@ -185,7 +142,7 @@ namespace :redmine do
         has_many :customs, :class_name => "TracTicketCustom", :foreign_key => :ticket
 
         def attachments
-          TracMigrate::TracAttachment.all(:conditions => ["type = 'ticket' AND id = ?", self.id.to_s])
+          TracFieldCheck::TracAttachment.all(:conditions => ["type = 'ticket' AND id = ?", self.id.to_s])
         end
 
         def ticket_type
@@ -215,30 +172,6 @@ namespace :redmine do
         def time; Time.at2(read_attribute(:time)) end
       end
 
-      TRAC_WIKI_PAGES = %w(InterMapTxt InterTrac InterWiki RecentChanges SandBox TracAccessibility TracAdmin TracBackup TracBrowser TracCgi TracChangeset \
-                           TracEnvironment TracFastCgi TracGuide TracImport TracIni TracInstall TracInterfaceCustomization \
-                           TracLinks TracLogging TracModPython TracNotification TracPermissions TracPlugins TracQuery \
-                           TracReports TracRevisionLog TracRoadmap TracRss TracSearch TracStandalone TracSupport TracSyntaxColoring TracTickets \
-                           TracTicketsCustomFields TracTimeline TracUnicode TracUpgrade TracWiki WikiDeletePage WikiFormatting \
-                           WikiHtml WikiMacros WikiNewPage WikiPageNames WikiProcessors WikiRestructuredText WikiRestructuredTextLinks \
-                           CamelCase TitleIndex)
-
-      class TracWikiPage < ActiveRecord::Base
-        self.table_name = :wiki
-        set_primary_key :name
-
-        def self.columns
-          # Hides readonly Trac field to prevent clash with AR readonly? method (Rails 2.0)
-          super.select {|column| column.name.to_s != 'readonly'}
-        end
-
-        def attachments
-          TracMigrate::TracAttachment.all(:conditions => ["type = 'wiki' AND id = ?", self.id.to_s])
-        end
-
-        def time; Time.at2(read_attribute(:time)) end
-      end
-
       class TracPermission < ActiveRecord::Base
         self.table_name = :permission
       end
@@ -247,145 +180,14 @@ namespace :redmine do
         self.table_name = :session_attribute
       end
 
-      def self.find_or_create_user(username, project_member = false)
+      def self.find_user(username, project_member = false)
         return User.anonymous if username.blank?
 
         u = User.find_by_login(username)
-        if !u
-          # Create a new user if not found
-          mail = username[0, User::MAIL_LENGTH_LIMIT]
-          if mail_attr = TracSessionAttribute.find_by_sid_and_name(username, 'email')
-            mail = mail_attr.value
-          end
-          mail = "#{mail}@foo.bar" unless mail.include?("@")
-
-          name = username
-          if name_attr = TracSessionAttribute.find_by_sid_and_name(username, 'name')
-            name = name_attr.value
-          end
-          name =~ (/(\w+)(\s+\w+)?/)
-          fn = ($1 || "-").strip
-          ln = ($2 || '-').strip
-
-          u = User.new :mail => mail.gsub(/[^-@a-z0-9\.]/i, '-'),
-                       :firstname => fn[0, limit_for(User, 'firstname')],
-                       :lastname => ln[0, limit_for(User, 'lastname')]
-
-          u.login = username[0, User::LOGIN_LENGTH_LIMIT].gsub(/[^a-z0-9_\-@\.]/i, '-')
-          u.password = 'trac'
-          u.admin = true if TracPermission.find_by_username_and_action(username, 'admin')
-          # finally, a default user is used if the new user is not valid
-          u = User.first unless u.save
-        end
-        # Make sure user is a member of the project
-        if project_member && !u.member_of?(@target_project)
-          role = DEFAULT_ROLE
-          if u.admin
-            role = ROLE_MAPPING['admin']
-          elsif TracPermission.find_by_username_and_action(username, 'developer')
-            role = ROLE_MAPPING['developer']
-          end
-          Member.create(:user => u, :project => @target_project, :roles => [role])
-          u.reload
-        end
         u
       end
 
-      # Basic wiki syntax conversion
-      def self.convert_wiki_text(text)
-        # Titles
-        text = text.gsub(/^(\=+)\s(.+)\s(\=+)/) {|s| "\nh#{$1.length}. #{$2}\n"}
-        # External Links
-        text = text.gsub(/\[(http[^\s]+)\s+([^\]]+)\]/) {|s| "\"#{$2}\":#{$1}"}
-        # Ticket links:
-        #      [ticket:234 Text],[ticket:234 This is a test]
-        text = text.gsub(/\[ticket\:([^\ ]+)\ (.+?)\]/, '"\2":/issues/show/\1')
-        #      ticket:1234
-        #      #1 is working cause Redmine uses the same syntax.
-        text = text.gsub(/ticket\:([^\ ]+)/, '#\1')
-        # Milestone links:
-        #      [milestone:"0.1.0 Mercury" Milestone 0.1.0 (Mercury)]
-        #      The text "Milestone 0.1.0 (Mercury)" is not converted,
-        #      cause Redmine's wiki does not support this.
-        text = text.gsub(/\[milestone\:\"([^\"]+)\"\ (.+?)\]/, 'version:"\1"')
-        #      [milestone:"0.1.0 Mercury"]
-        text = text.gsub(/\[milestone\:\"([^\"]+)\"\]/, 'version:"\1"')
-        text = text.gsub(/milestone\:\"([^\"]+)\"/, 'version:"\1"')
-        #      milestone:0.1.0
-        text = text.gsub(/\[milestone\:([^\ ]+)\]/, 'version:\1')
-        text = text.gsub(/milestone\:([^\ ]+)/, 'version:\1')
-        # Internal Links
-        text = text.gsub(/\[\[BR\]\]/, "\n") # This has to go before the rules below
-        text = text.gsub(/\[\"(.+)\".*\]/) {|s| "[[#{$1.delete(',./?;|:')}]]"}
-        text = text.gsub(/\[wiki:\"(.+)\".*\]/) {|s| "[[#{$1.delete(',./?;|:')}]]"}
-        text = text.gsub(/\[wiki:\"(.+)\".*\]/) {|s| "[[#{$1.delete(',./?;|:')}]]"}
-        text = text.gsub(/\[wiki:([^\s\]]+)\]/) {|s| "[[#{$1.delete(',./?;|:')}]]"}
-        text = text.gsub(/\[wiki:([^\s\]]+)\s(.*)\]/) {|s| "[[#{$1.delete(',./?;|:')}|#{$2.delete(',./?;|:')}]]"}
-
-  # Links to pages UsingJustWikiCaps
-  text = text.gsub(/([^!]|^)(^| )([A-Z][a-z]+[A-Z][a-zA-Z]+)/, '\\1\\2[[\3]]')
-  # Normalize things that were supposed to not be links
-  # like !NotALink
-  text = text.gsub(/(^| )!([A-Z][A-Za-z]+)/, '\1\2')
-        # Revisions links
-        text = text.gsub(/\[(\d+)\]/, 'r\1')
-        # Ticket number re-writing
-        text = text.gsub(/#(\d+)/) do |s|
-          if $1.length < 10
-#            TICKET_MAP[$1.to_i] ||= $1
-            "\##{TICKET_MAP[$1.to_i] || $1}"
-          else
-            s
-          end
-        end
-        # We would like to convert the Code highlighting too
-        # This will go into the next line.
-        shebang_line = false
-        # Regular expression for start of code
-        pre_re = /\{\{\{/
-        # Code highlighting...
-        shebang_re = /^\#\!([a-z]+)/
-        # Regular expression for end of code
-        pre_end_re = /\}\}\}/
-
-        # Go through the whole text..extract it line by line
-        text = text.gsub(/^(.*)$/) do |line|
-          m_pre = pre_re.match(line)
-          if m_pre
-            line = '<pre>'
-          else
-            m_sl = shebang_re.match(line)
-            if m_sl
-              shebang_line = true
-              line = '<code class="' + m_sl[1] + '">'
-            end
-            m_pre_end = pre_end_re.match(line)
-            if m_pre_end
-              line = '</pre>'
-              if shebang_line
-                line = '</code>' + line
-              end
-            end
-          end
-          line
-        end
-
-        # Highlighting
-        text = text.gsub(/'''''([^\s])/, '_*\1')
-        text = text.gsub(/([^\s])'''''/, '\1*_')
-        text = text.gsub(/'''/, '*')
-        text = text.gsub(/''/, '_')
-        text = text.gsub(/__/, '+')
-        text = text.gsub(/~~/, '-')
-        text = text.gsub(/`/, '@')
-        text = text.gsub(/,,/, '~')
-        # Lists
-        text = text.gsub(/^([ ]+)\* /) {|s| '*' * $1.length + " "}
-
-        text
-      end
-
-      def self.migrate
+      def self.do_check
         establish_connection
 
         # Quick database test
@@ -394,134 +196,83 @@ namespace :redmine do
         lookup_database_version
         print "Trac database version is: ", database_version, "\n"
 
-        migrated_components = 0
-        migrated_milestones = 0
-        migrated_tickets = 0
-        migrated_custom_values = 0
-        migrated_ticket_attachments = 0
-        migrated_wiki_edits = 0
-        migrated_wiki_attachments = 0
-
-        #Wiki system initializing...
-        @target_project.wiki.destroy if @target_project.wiki
-        @target_project.reload
-        wiki = Wiki.new(:project => @target_project, :start_page => 'WikiStart')
-        wiki_edit_count = 0
-
         # Components
-        print "Migrating components"
-        issues_category_map = {}
+        print "===Checking components===\n"
         TracComponent.all.each do |component|
-        print '.'
-        STDOUT.flush
-          c = IssueCategory.new :project => @target_project,
-                                :name => encode(component.name[0, limit_for(IssueCategory, 'name')])
-        next unless c.save
-        issues_category_map[component.name] = c
-        migrated_components += 1
+          puts encode(component.name)
         end
         puts
 
         # Milestones
-        print "Migrating milestones"
-        version_map = {}
+        print "===Checking milestones===\n"
         TracMilestone.all.each do |milestone|
-          print '.'
-          STDOUT.flush
-          # First we try to find the wiki page...
-          p = wiki.find_or_new_page(milestone.name.to_s)
-          p.content = WikiContent.new(:page => p) if p.new_record?
-          p.content.text = milestone.description.to_s
-          p.content.author = find_or_create_user('trac')
-          p.content.comments = 'Milestone'
-          p.save
-
-          v = Version.new :project => @target_project,
-                          :name => encode(milestone.name[0, limit_for(Version, 'name')]),
-                          :description => nil,
-                          :wiki_page_title => milestone.name.to_s,
-                          :effective_date => milestone.completed
-
-          next unless v.save
-          version_map[milestone.name] = v
-          migrated_milestones += 1
+          puts encode(milestone.name)
         end
         puts
 
         # Custom fields
         # TODO: read trac.ini instead
-        print "Migrating custom fields"
-        custom_field_map = {}
+        print "===Checking custom fields===\n"
         TracTicketCustom.find_by_sql("SELECT DISTINCT name FROM #{TracTicketCustom.table_name}").each do |field|
-          print '.'
-          STDOUT.flush
-          # Redmine custom field name
-          field_name = encode(field.name[0, limit_for(IssueCustomField, 'name')]).humanize
-          # Find if the custom already exists in Redmine
-          f = IssueCustomField.find_by_name(field_name)
-          # Or create a new one
-          f ||= IssueCustomField.create(:name => encode(field.name[0, limit_for(IssueCustomField, 'name')]).humanize,
-                                        :field_format => 'string')
-
-          next if f.new_record?
-          f.trackers = Tracker.all
-          f.projects << @target_project
-          custom_field_map[field.name] = f
+          puts encode(field.name)
         end
         puts
 
-        # Trac 'resolution' field as a Redmine custom field
-        r = IssueCustomField.where(:name => "Resolution").first
-        r = IssueCustomField.new(:name => 'Resolution',
-                                 :field_format => 'list',
-                                 :is_filter => true) if r.nil?
-        r.trackers = Tracker.all
-        r.projects << @target_project
-        r.possible_values = (r.possible_values + %w(fixed invalid wontfix duplicate worksforme)).flatten.compact.uniq
-        r.save!
-        custom_field_map['resolution'] = r
+        if false
+          # Trac 'resolution' field as a Redmine custom field
+          r = IssueCustomField.where(:name => "Resolution").first
+          r = IssueCustomField.new(:name => 'Resolution',
+                                   :field_format => 'list',
+                                   :is_filter => true) if r.nil?
+          r.trackers = Tracker.all
+          r.projects << @target_project
+          r.possible_values = (r.possible_values + %w(fixed invalid wontfix duplicate worksforme)).flatten.compact.uniq
+          r.save!
+          custom_field_map['resolution'] = r
+        end
 
-        # Tickets
-        print "Migrating tickets"
+        if false
+          # Tickets
+          print "Migrating tickets"
           TracTicket.find_each(:batch_size => 200) do |ticket|
-          print '.'
-          STDOUT.flush
-          i = Issue.new :project => @target_project,
+            print '.'
+            STDOUT.flush
+            i = Issue.new :project => @target_project,
                           :subject => encode(ticket.summary[0, limit_for(Issue, 'subject')]),
                           :description => convert_wiki_text(encode(ticket.description)),
                           :priority => PRIORITY_MAPPING[ticket.priority] || DEFAULT_PRIORITY,
                           :created_on => ticket.time,
                           :updated_on => ticket.changetime
-          i.author = find_or_create_user(ticket.reporter)
-          i.category = issues_category_map[ticket.component] unless ticket.component.blank?
-          i.fixed_version = version_map[ticket.milestone] unless ticket.milestone.blank?
-          i.status = STATUS_MAPPING[ticket.status] || DEFAULT_STATUS
-          i.tracker = TRACKER_MAPPING[ticket.ticket_type] || DEFAULT_TRACKER
-          i.id = ticket.id unless Issue.exists?(ticket.id)
-          next unless Time.fake(ticket.changetime) { i.save }
-          TICKET_MAP[ticket.id] = i.id
-          migrated_tickets += 1
+            i.author = find_user(ticket.reporter)
+            i.category = issues_category_map[ticket.component] unless ticket.component.blank?
+            i.fixed_version = version_map[ticket.milestone] unless ticket.milestone.blank?
+            i.status = STATUS_MAPPING[ticket.status] || DEFAULT_STATUS
+            i.tracker = TRACKER_MAPPING[ticket.ticket_type] || DEFAULT_TRACKER
+            i.id = ticket.id unless Issue.exists?(ticket.id)
+            next unless Time.fake(ticket.changetime) { i.save }
+            TICKET_MAP[ticket.id] = i.id
+            migrated_tickets += 1
 
-          # Owner
+            # Owner
             unless ticket.owner.blank?
-              i.assigned_to = find_or_create_user(ticket.owner, true)
+              i.assigned_to = find_user(ticket.owner, true)
               Time.fake(ticket.changetime) { i.save }
             end
 
-          # Comments and status/resolution changes
-          ticket.ticket_changes.group_by(&:time).each do |time, changeset|
+            # Comments and status/resolution changes
+            ticket.ticket_changes.group_by(&:time).each do |time, changeset|
               status_change = changeset.select {|change| change.field == 'status'}.first
               resolution_change = changeset.select {|change| change.field == 'resolution'}.first
               comment_change = changeset.select {|change| change.field == 'comment'}.first
 
               n = Journal.new :notes => (comment_change ? convert_wiki_text(encode(comment_change.newvalue)) : ''),
                               :created_on => time
-              n.user = find_or_create_user(changeset.first.author)
+              n.user = find_user(changeset.first.author)
               n.journalized = i
               if status_change &&
-                   STATUS_MAPPING[status_change.oldvalue] &&
-                   STATUS_MAPPING[status_change.newvalue] &&
-                   (STATUS_MAPPING[status_change.oldvalue] != STATUS_MAPPING[status_change.newvalue])
+                 STATUS_MAPPING[status_change.oldvalue] &&
+                 STATUS_MAPPING[status_change.newvalue] &&
+                 (STATUS_MAPPING[status_change.oldvalue] != STATUS_MAPPING[status_change.newvalue])
                 n.details << JournalDetail.new(:property => 'attr',
                                                :prop_key => 'status_id',
                                                :old_value => STATUS_MAPPING[status_change.oldvalue].id,
@@ -534,90 +285,43 @@ namespace :redmine do
                                                :value => resolution_change.newvalue)
               end
               n.save unless n.details.empty? && n.notes.blank?
-          end
+            end
 
-          # Attachments
-          ticket.attachments.each do |attachment|
-            next unless attachment.exist?
+            # Attachments
+            ticket.attachments.each do |attachment|
+              next unless attachment.exist?
               attachment.open {
                 a = Attachment.new :created_on => attachment.time
                 a.file = attachment
-                a.author = find_or_create_user(attachment.author)
+                a.author = find_user(attachment.author)
                 a.container = i
                 a.description = attachment.description
                 migrated_ticket_attachments += 1 if a.save
               }
-          end
-
-          # Custom fields
-          custom_values = ticket.customs.inject({}) do |h, custom|
-            if custom_field = custom_field_map[custom.name]
-              h[custom_field.id] = custom.value
-              migrated_custom_values += 1
             end
-            h
+
+            # Custom fields
+            custom_values = ticket.customs.inject({}) do |h, custom|
+              if custom_field = custom_field_map[custom.name]
+                h[custom_field.id] = custom.value
+                migrated_custom_values += 1
+              end
+              h
+            end
+            if custom_field_map['resolution'] && !ticket.resolution.blank?
+              custom_values[custom_field_map['resolution'].id] = ticket.resolution
+            end
+            i.custom_field_values = custom_values
+            i.save_custom_field_values
           end
-          if custom_field_map['resolution'] && !ticket.resolution.blank?
-            custom_values[custom_field_map['resolution'].id] = ticket.resolution
-          end
-          i.custom_field_values = custom_values
-          i.save_custom_field_values
+          
+
+          # update issue id sequence if needed (postgresql)
+          Issue.connection.reset_pk_sequence!(Issue.table_name) if Issue.connection.respond_to?('reset_pk_sequence!')
+          puts
         end
 
-        # update issue id sequence if needed (postgresql)
-        Issue.connection.reset_pk_sequence!(Issue.table_name) if Issue.connection.respond_to?('reset_pk_sequence!')
         puts
-
-        # Wiki
-        print "Migrating wiki"
-        if wiki.save
-          TracWikiPage.order('name, version').all.each do |page|
-            # Do not migrate Trac manual wiki pages
-            next if TRAC_WIKI_PAGES.include?(page.name)
-            wiki_edit_count += 1
-            print '.'
-            STDOUT.flush
-            p = wiki.find_or_new_page(page.name)
-            p.content = WikiContent.new(:page => p) if p.new_record?
-            p.content.text = page.text
-            p.content.author = find_or_create_user(page.author) unless page.author.blank? || page.author == 'trac'
-            p.content.comments = page.comment
-            Time.fake(page.time) { p.new_record? ? p.save : p.content.save }
-
-            next if p.content.new_record?
-            migrated_wiki_edits += 1
-
-            # Attachments
-            page.attachments.each do |attachment|
-              next unless attachment.exist?
-              next if p.attachments.find_by_filename(attachment.filename.gsub(/^.*(\\|\/)/, '').gsub(/[^\w\.\-]/,'_')) #add only once per page
-              attachment.open {
-                a = Attachment.new :created_on => attachment.time
-                a.file = attachment
-                a.author = find_or_create_user(attachment.author)
-                a.description = attachment.description
-                a.container = p
-                migrated_wiki_attachments += 1 if a.save
-              }
-            end
-          end
-
-          wiki.reload
-          wiki.pages.each do |page|
-            page.content.text = convert_wiki_text(page.content.text)
-            Time.fake(page.content.updated_on) { page.content.save }
-          end
-        end
-        puts
-
-        puts
-        puts "Components:      #{migrated_components}/#{TracComponent.count}"
-        puts "Milestones:      #{migrated_milestones}/#{TracMilestone.count}"
-        puts "Tickets:         #{migrated_tickets}/#{TracTicket.count}"
-        puts "Ticket files:    #{migrated_ticket_attachments}/" + TracAttachment.count(:conditions => {:type => 'ticket'}).to_s
-        puts "Custom values:   #{migrated_custom_values}/#{TracTicketCustom.count}"
-        puts "Wiki edits:      #{migrated_wiki_edits}/#{wiki_edit_count}"
-        puts "Wiki files:      #{migrated_wiki_attachments}/" + TracAttachment.count(:conditions => {:type => 'wiki'}).to_s
       end
 
       def self.limit_for(klass, attribute)
@@ -694,29 +398,6 @@ namespace :redmine do
       def self.trac_db_path; "#{trac_directory}/db/trac.db" end
       def self.trac_attachments_directory; "#{trac_directory}/attachments" end
 
-      def self.target_project_identifier(identifier)
-        project = Project.find_by_identifier(identifier)
-        if !project
-          # create the target project
-          project = Project.new :name => identifier.humanize,
-                                :description => ''
-          project.identifier = identifier
-          puts "Unable to create a project with identifier '#{identifier}'!" unless project.save
-          # enable issues and wiki for the created project
-          project.enabled_module_names = ['issue_tracking', 'wiki']
-        else
-          puts
-          puts "This project already exists in your Redmine database."
-          print "Are you sure you want to append data to this project ? [Y/n] "
-          STDOUT.flush
-          exit if STDIN.gets.match(/^n$/i)
-        end
-        project.trackers << TRACKER_BUG unless project.trackers.include?(TRACKER_BUG)
-        project.trackers << TRACKER_FEATURE unless project.trackers.include?(TRACKER_FEATURE)
-        @target_project = project.new_record? ? nil : project
-        @target_project.reload
-      end
-
       def self.connection_params
         if trac_adapter == 'sqlite3'
           {:adapter => 'sqlite3',
@@ -779,32 +460,19 @@ namespace :redmine do
 
     DEFAULT_PORTS = {'mysql' => 3306, 'postgresql' => 5432}
 
-    prompt('Trac directory') {|directory| TracMigrate.set_trac_directory directory.strip}
-    prompt('Trac database adapter (sqlite3, mysql2, postgresql)', :default => 'sqlite3') {|adapter| TracMigrate.set_trac_adapter adapter}
-    unless %w(sqlite3).include?(TracMigrate.trac_adapter)
-      prompt('Trac database host', :default => 'localhost') {|host| TracMigrate.set_trac_db_host host}
-      prompt('Trac database port', :default => DEFAULT_PORTS[TracMigrate.trac_adapter]) {|port| TracMigrate.set_trac_db_port port}
-      prompt('Trac database name') {|name| TracMigrate.set_trac_db_name name}
-      prompt('Trac database schema', :default => 'public') {|schema| TracMigrate.set_trac_db_schema schema}
-      prompt('Trac database username') {|username| TracMigrate.set_trac_db_username username}
-      prompt('Trac database password') {|password| TracMigrate.set_trac_db_password password}
+    prompt('Trac directory') {|directory| TracFieldCheck.set_trac_directory directory.strip}
+    prompt('Trac database adapter (sqlite3, mysql2, postgresql)', :default => 'sqlite3') {|adapter| TracFieldCheck.set_trac_adapter adapter}
+    unless %w(sqlite3).include?(TracFieldCheck.trac_adapter)
+      prompt('Trac database host', :default => 'localhost') {|host| TracFieldCheck.set_trac_db_host host}
+      prompt('Trac database port', :default => DEFAULT_PORTS[TracFieldCheck.trac_adapter]) {|port| TracFieldCheck.set_trac_db_port port}
+      prompt('Trac database name') {|name| TracFieldCheck.set_trac_db_name name}
+      prompt('Trac database schema', :default => 'public') {|schema| TracFieldCheck.set_trac_db_schema schema}
+      prompt('Trac database username') {|username| TracFieldCheck.set_trac_db_username username}
+      prompt('Trac database password') {|password| TracFieldCheck.set_trac_db_password password}
     end
-    prompt('Trac database encoding', :default => 'UTF-8') {|encoding| TracMigrate.encoding encoding}
-    prompt('Target project identifier') {|identifier| TracMigrate.target_project_identifier identifier}
+    prompt('Trac database encoding', :default => 'UTF-8') {|encoding| TracFieldCheck.encoding encoding}
     puts
 
-    old_notified_events = Setting.notified_events
-    old_password_min_length = Setting.password_min_length
-    begin
-      # Turn off email notifications temporarily
-      Setting.notified_events = []
-      Setting.password_min_length = 4
-      # Run the migration
-      TracMigrate.migrate
-    ensure
-      # Restore previous settings
-      Setting.notified_events = old_notified_events
-      Setting.password_min_length = old_password_min_length
-    end
+    TracFieldCheck.do_check
   end
 end
