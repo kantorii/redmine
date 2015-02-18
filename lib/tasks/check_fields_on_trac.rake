@@ -213,8 +213,10 @@ namespace :redmine do
         # Custom fields
         # TODO: read trac.ini instead
         print "===Checking custom fields===\n"
+        custom_field_values = {}
         TracTicketCustom.find_by_sql("SELECT DISTINCT name FROM #{TracTicketCustom.table_name}").each do |field|
           puts encode(field.name)
+          custom_field_values[field.name] = Set.new
         end
         puts
 
@@ -231,97 +233,23 @@ namespace :redmine do
           custom_field_map['resolution'] = r
         end
 
-        if false
-          # Tickets
-          print "Migrating tickets"
-          TracTicket.find_each(:batch_size => 200) do |ticket|
-            print '.'
-            STDOUT.flush
-            i = Issue.new :project => @target_project,
-                          :subject => encode(ticket.summary[0, limit_for(Issue, 'subject')]),
-                          :description => convert_wiki_text(encode(ticket.description)),
-                          :priority => PRIORITY_MAPPING[ticket.priority] || DEFAULT_PRIORITY,
-                          :created_on => ticket.time,
-                          :updated_on => ticket.changetime
-            i.author = find_user(ticket.reporter)
-            i.category = issues_category_map[ticket.component] unless ticket.component.blank?
-            i.fixed_version = version_map[ticket.milestone] unless ticket.milestone.blank?
-            i.status = STATUS_MAPPING[ticket.status] || DEFAULT_STATUS
-            i.tracker = TRACKER_MAPPING[ticket.ticket_type] || DEFAULT_TRACKER
-            i.id = ticket.id unless Issue.exists?(ticket.id)
-            next unless Time.fake(ticket.changetime) { i.save }
-            TICKET_MAP[ticket.id] = i.id
-            migrated_tickets += 1
+        # Tickets
+        print "===Checking tickets===\n"
+        TracTicket.find_each(:batch_size => 200) do |ticket|
+          print '.'
+          STDOUT.flush
 
-            # Owner
-            unless ticket.owner.blank?
-              i.assigned_to = find_user(ticket.owner, true)
-              Time.fake(ticket.changetime) { i.save }
-            end
-
-            # Comments and status/resolution changes
-            ticket.ticket_changes.group_by(&:time).each do |time, changeset|
-              status_change = changeset.select {|change| change.field == 'status'}.first
-              resolution_change = changeset.select {|change| change.field == 'resolution'}.first
-              comment_change = changeset.select {|change| change.field == 'comment'}.first
-
-              n = Journal.new :notes => (comment_change ? convert_wiki_text(encode(comment_change.newvalue)) : ''),
-                              :created_on => time
-              n.user = find_user(changeset.first.author)
-              n.journalized = i
-              if status_change &&
-                 STATUS_MAPPING[status_change.oldvalue] &&
-                 STATUS_MAPPING[status_change.newvalue] &&
-                 (STATUS_MAPPING[status_change.oldvalue] != STATUS_MAPPING[status_change.newvalue])
-                n.details << JournalDetail.new(:property => 'attr',
-                                               :prop_key => 'status_id',
-                                               :old_value => STATUS_MAPPING[status_change.oldvalue].id,
-                                               :value => STATUS_MAPPING[status_change.newvalue].id)
-              end
-              if resolution_change
-                n.details << JournalDetail.new(:property => 'cf',
-                                               :prop_key => custom_field_map['resolution'].id,
-                                               :old_value => resolution_change.oldvalue,
-                                               :value => resolution_change.newvalue)
-              end
-              n.save unless n.details.empty? && n.notes.blank?
-            end
-
-            # Attachments
-            ticket.attachments.each do |attachment|
-              next unless attachment.exist?
-              attachment.open {
-                a = Attachment.new :created_on => attachment.time
-                a.file = attachment
-                a.author = find_user(attachment.author)
-                a.container = i
-                a.description = attachment.description
-                migrated_ticket_attachments += 1 if a.save
-              }
-            end
-
-            # Custom fields
-            custom_values = ticket.customs.inject({}) do |h, custom|
-              if custom_field = custom_field_map[custom.name]
-                h[custom_field.id] = custom.value
-                migrated_custom_values += 1
-              end
-              h
-            end
-            if custom_field_map['resolution'] && !ticket.resolution.blank?
-              custom_values[custom_field_map['resolution'].id] = ticket.resolution
-            end
-            i.custom_field_values = custom_values
-            i.save_custom_field_values
+          # Custom fields
+          custom_field_values = ticket.customs.inject(custom_field_values) do |h, custom|
+            h[custom.name] << custom.value
+            h
           end
-          
-
-          # update issue id sequence if needed (postgresql)
-          Issue.connection.reset_pk_sequence!(Issue.table_name) if Issue.connection.respond_to?('reset_pk_sequence!')
-          puts
         end
-
         puts
+        print "Custom field values:\n"
+        print custom_field_values.inspect
+        puts
+
       end
 
       def self.limit_for(klass, attribute)
