@@ -69,6 +69,25 @@ namespace :redmine do
                         'developer' => developer_role
                         }
 
+        # taken from http://stackoverflow.com/a/16219473
+        # The main parse method is mostly borrowed from a tweet by @JEG2
+        class StrictTsvWithHeader
+          attr_reader :filepath
+          def initialize(filepath)
+            @filepath = filepath
+          end
+
+          def parse
+            open(filepath) do |f|
+              headers = f.gets.strip.split("\t")
+              f.each do |line|
+                fields = Hash[headers.zip(line.split("\t"))]
+                yield fields
+              end
+            end
+          end
+        end
+        
       class ::Time
         class << self
           alias :real_now :now
