@@ -475,7 +475,8 @@ namespace :redmine do
           print '.'
           STDOUT.flush
           # Redmine custom field name
-          field_name = encode(@target_field_name_prefix + field.name[0, limit_for(IssueCustomField, 'name') - @target_field_name_prefix.length]).humanize
+          # TODO: using limit_for() inside encode() isn't really the proper way to do things.
+          field_name = (@target_field_name_prefix + encode(field.name[0, limit_for(IssueCustomField, 'name') - @target_field_name_prefix.length])).humanize
           # Find if the custom already exists in Redmine
           f = IssueCustomField.find_by_name(field_name)
           # Or create a new one
@@ -490,8 +491,13 @@ namespace :redmine do
         puts
 
         # Trac 'resolution' field as a Redmine custom field
-        r = IssueCustomField.where(:name => "Resolution").first
-        r = IssueCustomField.new(:name => 'Resolution',
+        if @target_field_name_prefix_resolution
+          target_resolution_field_name = @target_field_name_prefix + "resolution"
+        else
+          target_resolution_field_name = "Resolution"
+        end
+        r = IssueCustomField.where(:name => target_resolution_field_name).first
+        r = IssueCustomField.new(:name => target_resolution_field_name,
                                  :field_format => 'list',
                                  :is_filter => true) if r.nil?
         r.trackers = Tracker.all
@@ -717,6 +723,10 @@ namespace :redmine do
         @target_field_name_prefix = prefix
       end
 
+      def self.set_prefix_resolution(prefix_resolution)
+        @target_field_name_prefix_resolution = prefix_resolution
+      end
+
       def self.target_project_identifier(identifier)
         project = Project.find_by_identifier(identifier)
         if !project
@@ -820,6 +830,16 @@ namespace :redmine do
     puts 'For project identifiers: Only lower case letters (a-z), numbers, dashes and underscores are allowed, must start with a lower case letter.'
     prompt('Target project identifier') {|identifier| TracMigrate.target_project_identifier identifier}
     prompt('Target field name prefix', :default => '') {|prefix| TracMigrate.set_target_field_name_prefix prefix}
+    print "Add prefix to resolution? [y/n]"
+    prefix_resolution = STDIN.gets
+    if prefix_resolution.match(/^y$/i)
+      TracMigrate.set_prefix_resolution true
+    elsif prefix_resolution.match(/^n$/i)
+      TracMigrate.set_prefix_resolution false
+    else
+      puts "Enter y or n!"
+      break
+    end
     puts
 
     old_notified_events = Setting.notified_events
