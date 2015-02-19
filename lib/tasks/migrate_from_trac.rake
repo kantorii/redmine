@@ -433,8 +433,8 @@ namespace :redmine do
         TracComponent.all.each do |component|
         print '.'
         STDOUT.flush
-          c = IssueCategory.new :project => @target_project,
-                                :name => encode(component.name[0, limit_for(IssueCategory, 'name')])
+        c = IssueCategory.new :project => @target_project,
+                              :name => encode(component.name[0, limit_for(IssueCategory, 'name')])
         next unless c.save
         issues_category_map[component.name] = c
         migrated_components += 1
@@ -475,11 +475,11 @@ namespace :redmine do
           print '.'
           STDOUT.flush
           # Redmine custom field name
-          field_name = encode(field.name[0, limit_for(IssueCustomField, 'name')]).humanize
+          field_name = encode(@target_field_name_prefix + field.name[0, limit_for(IssueCustomField, 'name') - @target_field_name_prefix.length]).humanize
           # Find if the custom already exists in Redmine
           f = IssueCustomField.find_by_name(field_name)
           # Or create a new one
-          f ||= IssueCustomField.create(:name => encode(field.name[0, limit_for(IssueCustomField, 'name')]).humanize,
+          f ||= IssueCustomField.create(:name => field_name,
                                         :field_format => 'string')
 
           next if f.new_record?
@@ -713,6 +713,10 @@ namespace :redmine do
       def self.trac_db_path; "#{trac_directory}/db/trac.db" end
       def self.trac_attachments_directory; "#{trac_directory}/attachments" end
 
+      def self.set_target_field_name_prefix(prefix)
+        @target_field_name_prefix = prefix
+      end
+
       def self.target_project_identifier(identifier)
         project = Project.find_by_identifier(identifier)
         if !project
@@ -720,7 +724,11 @@ namespace :redmine do
           project = Project.new :name => identifier.humanize,
                                 :description => ''
           project.identifier = identifier
-          puts "Unable to create a project with identifier '#{identifier}'!" unless project.save
+          if !project.save
+            puts "Unable to create a project with identifier '#{identifier}'!"
+            puts "\tproject valid?:#{project.valid?}"
+            puts "\tproject error:#{project.errors.messages}"
+          end
           # enable issues and wiki for the created project
           project.enabled_module_names = ['issue_tracking', 'wiki']
         else
@@ -809,7 +817,9 @@ namespace :redmine do
       prompt('Trac database password') {|password| TracMigrate.set_trac_db_password password}
     end
     prompt('Trac database encoding', :default => 'UTF-8') {|encoding| TracMigrate.encoding encoding}
+    puts 'For project identifiers: Only lower case letters (a-z), numbers, dashes and underscores are allowed, must start with a lower case letter.'
     prompt('Target project identifier') {|identifier| TracMigrate.target_project_identifier identifier}
+    prompt('Target field name prefix', :default => '') {|prefix| TracMigrate.set_target_field_name_prefix prefix}
     puts
 
     old_notified_events = Setting.notified_events
