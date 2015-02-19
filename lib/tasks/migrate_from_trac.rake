@@ -476,7 +476,7 @@ namespace :redmine do
           STDOUT.flush
           # Redmine custom field name
           # TODO: using limit_for() inside encode() isn't really the proper way to do things.
-          field_name = (@target_field_name_prefix + encode(field.name[0, limit_for(IssueCustomField, 'name') - @target_field_name_prefix.length])).humanize
+          field_name = @target_field_name_prefix + encode(field.name[0, limit_for(IssueCustomField, 'name') - @target_field_name_prefix.length])
           # Find if the custom already exists in Redmine
           f = IssueCustomField.find_by_name(field_name)
           # Or create a new one
@@ -506,17 +506,30 @@ namespace :redmine do
         r.save!
         custom_field_map['resolution'] = r
 
+        # Trac ID field as a Redmine custom field
+        if @target_trac_id_field_name
+          trac_id_field = IssueCustomField.find_by_name(@target_trac_id_field_name)
+          trac_id_field ||= IssueCustomField.create(:name => @target_trac_id_field_name,
+                                                    :field_format => 'int')
+          if !trac_id_field.new_record?
+            trac_id_field.trackers = Tracker.all
+            trac_id_field.projects << @target_project
+          end
+
+          custom_field_map['id'] = trac_id_field
+        end
+
         # Tickets
         print "Migrating tickets"
-          TracTicket.find_each(:batch_size => 200) do |ticket|
+        TracTicket.find_each(:batch_size => 200) do |ticket|
           print '.'
           STDOUT.flush
           i = Issue.new :project => @target_project,
-                          :subject => encode(ticket.summary[0, limit_for(Issue, 'subject')]),
-                          :description => convert_wiki_text(encode(ticket.description)),
-                          :priority => PRIORITY_MAPPING[ticket.priority] || DEFAULT_PRIORITY,
-                          :created_on => ticket.time,
-                          :updated_on => ticket.changetime
+                        :subject => encode(ticket.summary[0, limit_for(Issue, 'subject')]),
+                        :description => convert_wiki_text(encode(ticket.description)),
+                        :priority => PRIORITY_MAPPING[ticket.priority] || DEFAULT_PRIORITY,
+                        :created_on => ticket.time,
+                        :updated_on => ticket.changetime
           i.author = find_or_create_user(ticket.reporter)
           i.category = issues_category_map[ticket.component] unless ticket.component.blank?
           i.fixed_version = version_map[ticket.milestone] unless ticket.milestone.blank?
@@ -528,50 +541,50 @@ namespace :redmine do
           migrated_tickets += 1
 
           # Owner
-            unless ticket.owner.blank?
-              i.assigned_to = find_or_create_user(ticket.owner, true)
-              Time.fake(ticket.changetime) { i.save }
-            end
+          unless ticket.owner.blank?
+            i.assigned_to = find_or_create_user(ticket.owner, true)
+            Time.fake(ticket.changetime) { i.save }
+          end
 
           # Comments and status/resolution changes
           ticket.ticket_changes.group_by(&:time).each do |time, changeset|
-              status_change = changeset.select {|change| change.field == 'status'}.first
-              resolution_change = changeset.select {|change| change.field == 'resolution'}.first
-              comment_change = changeset.select {|change| change.field == 'comment'}.first
+            status_change = changeset.select {|change| change.field == 'status'}.first
+            resolution_change = changeset.select {|change| change.field == 'resolution'}.first
+            comment_change = changeset.select {|change| change.field == 'comment'}.first
 
-              n = Journal.new :notes => (comment_change ? convert_wiki_text(encode(comment_change.newvalue)) : ''),
-                              :created_on => time
-              n.user = find_or_create_user(changeset.first.author)
-              n.journalized = i
-              if status_change &&
-                   STATUS_MAPPING[status_change.oldvalue] &&
-                   STATUS_MAPPING[status_change.newvalue] &&
-                   (STATUS_MAPPING[status_change.oldvalue] != STATUS_MAPPING[status_change.newvalue])
-                n.details << JournalDetail.new(:property => 'attr',
-                                               :prop_key => 'status_id',
-                                               :old_value => STATUS_MAPPING[status_change.oldvalue].id,
-                                               :value => STATUS_MAPPING[status_change.newvalue].id)
-              end
-              if resolution_change
-                n.details << JournalDetail.new(:property => 'cf',
-                                               :prop_key => custom_field_map['resolution'].id,
-                                               :old_value => resolution_change.oldvalue,
-                                               :value => resolution_change.newvalue)
-              end
-              n.save unless n.details.empty? && n.notes.blank?
+            n = Journal.new :notes => (comment_change ? convert_wiki_text(encode(comment_change.newvalue)) : ''),
+                            :created_on => time
+            n.user = find_or_create_user(changeset.first.author)
+            n.journalized = i
+            if status_change &&
+               STATUS_MAPPING[status_change.oldvalue] &&
+               STATUS_MAPPING[status_change.newvalue] &&
+               (STATUS_MAPPING[status_change.oldvalue] != STATUS_MAPPING[status_change.newvalue])
+              n.details << JournalDetail.new(:property => 'attr',
+                                             :prop_key => 'status_id',
+                                             :old_value => STATUS_MAPPING[status_change.oldvalue].id,
+                                             :value => STATUS_MAPPING[status_change.newvalue].id)
+            end
+            if resolution_change
+              n.details << JournalDetail.new(:property => 'cf',
+                                             :prop_key => custom_field_map['resolution'].id,
+                                             :old_value => resolution_change.oldvalue,
+                                             :value => resolution_change.newvalue)
+            end
+            n.save unless n.details.empty? && n.notes.blank?
           end
 
           # Attachments
           ticket.attachments.each do |attachment|
             next unless attachment.exist?
-              attachment.open {
-                a = Attachment.new :created_on => attachment.time
-                a.file = attachment
-                a.author = find_or_create_user(attachment.author)
-                a.container = i
-                a.description = attachment.description
-                migrated_ticket_attachments += 1 if a.save
-              }
+            attachment.open {
+              a = Attachment.new :created_on => attachment.time
+              a.file = attachment
+              a.author = find_or_create_user(attachment.author)
+              a.container = i
+              a.description = attachment.description
+              migrated_ticket_attachments += 1 if a.save
+            }
           end
 
           # Custom fields
@@ -585,6 +598,10 @@ namespace :redmine do
           if custom_field_map['resolution'] && !ticket.resolution.blank?
             custom_values[custom_field_map['resolution'].id] = ticket.resolution
           end
+          if @target_trac_id_field_name
+            custom_values[custom_field_map['id'].id] = ticket.id
+          end
+            
           i.custom_field_values = custom_values
           i.save_custom_field_values
         end
@@ -719,6 +736,10 @@ namespace :redmine do
       def self.trac_db_path; "#{trac_directory}/db/trac.db" end
       def self.trac_attachments_directory; "#{trac_directory}/attachments" end
 
+      def self.set_target_trac_id_field_name(trac_id_field_name)
+        @target_trac_id_field_name = trac_id_field_name
+      end
+
       def self.set_target_field_name_prefix(prefix)
         @target_field_name_prefix = prefix
       end
@@ -840,6 +861,7 @@ namespace :redmine do
       puts "Enter y or n!"
       break
     end
+    prompt('Target field name for Trac ID (not prefixed)', :default => nil) {|target_trac_id_field_name| TracMigrate.set_target_trac_id_field_name target_trac_id_field_name}
     puts
 
     old_notified_events = Setting.notified_events
