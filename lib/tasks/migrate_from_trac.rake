@@ -71,7 +71,7 @@ namespace :redmine do
 
         # taken from http://stackoverflow.com/a/16219473
         # The main parse method is mostly borrowed from a tweet by @JEG2
-        class StrictTsvWithHeader
+        class StrictTsv
           attr_reader :filepath
           def initialize(filepath)
             @filepath = filepath
@@ -79,15 +79,14 @@ namespace :redmine do
 
           def parse
             open(filepath) do |f|
-              headers = f.gets.strip.split("\t")
               f.each do |line|
-                fields = Hash[headers.zip(line.split("\t"))]
+                fields = line.chomp.split("\t")
                 yield fields
               end
             end
           end
         end
-        
+
       class ::Time
         class << self
           alias :real_now :now
@@ -429,14 +428,32 @@ namespace :redmine do
 
         # Components
         print "Migrating components"
+
+        category_name_map = {}
+        if !@component_map_file.blank?
+          category_name_map_file = StrictTsv.new(@component_map_file)
+          category_name_map_file.parse do |row|
+            category_name_map[row[0]] = row[1]
+          end
+        end
+        
         issues_category_map = {}
         TracComponent.all.each do |component|
           print '.'
           STDOUT.flush
-          c = IssueCategory.new :project => @target_project,
-                                :name => encode(component.name[0, limit_for(IssueCategory, 'name')])
+          component_name = encode(component.name[0, limit_for(IssueCategory, 'name')])
+          if !@component_map_file.blank?
+            next if category_name_map[component_name].nil?
+            category_name = @target_category_prefix + category_name_map[component_name]
+            c = IssueCategory.find(:first, :conditions => ["name = ?", category_name])
+            c ||= IssueCategory.new :project => @target_project,
+                                    :name => category_name
+          else
+            c = IssueCategory.new :project => @target_project,
+                                  :name => @target_category_prefix + component_name
+          end
           next unless c.save
-          issues_category_map[component.name] = c
+          issues_category_map[component_name] = c
           migrated_components += 1
         end
         puts
@@ -507,7 +524,7 @@ namespace :redmine do
         custom_field_map['resolution'] = r
 
         # Trac ID field as a Redmine custom field
-        if @target_trac_id_field_name
+        if !@target_trac_id_field_name.blank?
           trac_id_field = IssueCustomField.find_by_name(@target_trac_id_field_name)
           trac_id_field ||= IssueCustomField.create(:name => @target_trac_id_field_name,
                                                     :field_format => 'int')
@@ -518,6 +535,18 @@ namespace :redmine do
 
           custom_field_map['id'] = trac_id_field
         end
+
+        # Trac component field as a Redmine custom field
+        target_component_field_name = @target_field_name_prefix + "component"
+        trac_component_field = IssueCustomField.find_by_name(target_component_field_name)
+        trac_component_field ||= IssueCustomField.create(:name => target_component_field_name,
+                                                         :field_format => 'string')
+        if !trac_component_field.new_record?
+          trac_component_field.trackers = Tracker.all
+          trac_component_field.projects << @target_project
+        end
+          
+        custom_field_map['component'] = trac_component_field
 
         # Tickets
         print "Migrating tickets"
@@ -598,9 +627,10 @@ namespace :redmine do
           if custom_field_map['resolution'] && !ticket.resolution.blank?
             custom_values[custom_field_map['resolution'].id] = ticket.resolution
           end
-          if @target_trac_id_field_name
+          if !@target_trac_id_field_name.blank?
             custom_values[custom_field_map['id'].id] = ticket.id
           end
+          custom_values[custom_field_map['component'].id] = ticket.component
             
           i.custom_field_values = custom_values
           i.save_custom_field_values
@@ -748,6 +778,14 @@ namespace :redmine do
         @target_field_name_prefix_resolution = prefix_resolution
       end
 
+      def self.set_component_map_file(map_file)
+        @component_map_file = map_file
+      end
+
+      def self.set_target_category_prefix(category_prefix)
+        @target_category_prefix = category_prefix
+      end
+
       def self.target_project_identifier(identifier)
         project = Project.find_by_identifier(identifier)
         if !project
@@ -862,6 +900,9 @@ namespace :redmine do
       break
     end
     prompt('Target field name for Trac ID (not prefixed)', :default => nil) {|target_trac_id_field_name| TracMigrate.set_target_trac_id_field_name target_trac_id_field_name}
+    prompt('Trac component>Redmine category map file (tab-delimited)', :default => nil) {|map_file| TracMigrate.set_component_map_file map_file}
+    prompt('Redmine category prefix', :default => '') {|target_category_prefix| TracMigrate.set_target_category_prefix target_category_prefix}
+                                                                                                                                       
     puts
 
     old_notified_events = Setting.notified_events
