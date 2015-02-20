@@ -431,13 +431,13 @@ namespace :redmine do
         print "Migrating components"
         issues_category_map = {}
         TracComponent.all.each do |component|
-        print '.'
-        STDOUT.flush
-        c = IssueCategory.new :project => @target_project,
-                              :name => encode(component.name[0, limit_for(IssueCategory, 'name')])
-        next unless c.save
-        issues_category_map[component.name] = c
-        migrated_components += 1
+          print '.'
+          STDOUT.flush
+          c = IssueCategory.new :project => @target_project,
+                                :name => encode(component.name[0, limit_for(IssueCategory, 'name')])
+          next unless c.save
+          issues_category_map[component.name] = c
+          migrated_components += 1
         end
         puts
 
