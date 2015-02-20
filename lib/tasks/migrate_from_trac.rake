@@ -85,6 +85,14 @@ namespace :redmine do
               end
             end
           end
+
+          def parse_map
+            map = {}
+            parse do |row|
+              map[row[0]] = row[1]
+            end
+            map
+          end
         end
 
       class ::Time
@@ -432,9 +440,7 @@ namespace :redmine do
         category_name_map = {}
         if !@component_map_file.blank?
           category_name_map_file = StrictTsv.new(@component_map_file)
-          category_name_map_file.parse do |row|
-            category_name_map[row[0]] = row[1]
-          end
+          category_name_map = category_name_map_file.parse_map
         end
         
         issues_category_map = {}
@@ -460,6 +466,13 @@ namespace :redmine do
 
         # Milestones
         print "Migrating milestones"
+        if !@milestone_map_file.nil?
+          milestone_project_map_file = StrictTsv.new(@milestone_map_file)
+          milestone_project_map = milestone_project_map_file.parse_map
+        else
+          milestone_project_map = {}
+        end
+        
         version_map = {}
         TracMilestone.all.each do |milestone|
           print '.'
@@ -472,8 +485,16 @@ namespace :redmine do
           p.content.comments = 'Milestone'
           p.save
 
-          v = Version.new :project => @target_project,
-                          :name => encode(milestone.name[0, limit_for(Version, 'name')]),
+          target_project = @target_project
+          target_project_identifier = milestone_project_map[milestone.name.to_s]
+          if target_project_identifier
+            target_project_identifier = @target_project_prefix + target_project_identifier
+            target_project = find_or_create_project(target_project_identifier, false)
+          end
+          milestone_name = encode(milestone.name[0, limit_for(Version, 'name')])
+          v = Version.find(:first, :conditions => ["name = ?", milestone_name])
+          v ||= Version.new :project => target_project,
+                          :name => milestone_name,
                           :description => nil,
                           :wiki_page_title => milestone.name.to_s,
                           :effective_date => milestone.completed
@@ -553,7 +574,11 @@ namespace :redmine do
         TracTicket.find_each(:batch_size => 200) do |ticket|
           print '.'
           STDOUT.flush
-          i = Issue.new :project => @target_project,
+
+          fixed_version = version_map[ticket.milestone]
+          target_project = fixed_version.nil? ? @target_project : fixed_version.project
+          
+          i = Issue.new :project => target_project,
                         :subject => encode(ticket.summary[0, limit_for(Issue, 'subject')]),
                         :description => convert_wiki_text(encode(ticket.description)),
                         :priority => PRIORITY_MAPPING[ticket.priority] || DEFAULT_PRIORITY,
@@ -561,7 +586,7 @@ namespace :redmine do
                         :updated_on => ticket.changetime
           i.author = find_or_create_user(ticket.reporter)
           i.category = issues_category_map[ticket.component] unless ticket.component.blank?
-          i.fixed_version = version_map[ticket.milestone] unless ticket.milestone.blank?
+          i.fixed_version = fixed_version
           i.status = STATUS_MAPPING[ticket.status] || DEFAULT_STATUS
           i.tracker = TRACKER_MAPPING[ticket.ticket_type] || DEFAULT_TRACKER
           i.id = ticket.id unless Issue.exists?(ticket.id)
@@ -640,6 +665,7 @@ namespace :redmine do
         Issue.connection.reset_pk_sequence!(Issue.table_name) if Issue.connection.respond_to?('reset_pk_sequence!')
         puts
 
+ raise "let's save time"
         # Wiki
         print "Migrating wiki"
         if wiki.save
@@ -786,7 +812,15 @@ namespace :redmine do
         @target_category_prefix = category_prefix
       end
 
-      def self.target_project_identifier(identifier)
+      def self.set_milestone_map_file(map_file)
+        @milestone_map_file = map_file
+      end
+
+      def self.set_target_project_prefix(project_prefix)
+        @target_project_prefix = project_prefix
+      end
+
+      def self.find_or_create_project(identifier, warning)
         project = Project.find_by_identifier(identifier)
         if !project
           # create the target project
@@ -800,7 +834,7 @@ namespace :redmine do
           end
           # enable issues and wiki for the created project
           project.enabled_module_names = ['issue_tracking', 'wiki']
-        else
+        elsif warning
           puts
           puts "This project already exists in your Redmine database."
           print "Are you sure you want to append data to this project ? [Y/n] "
@@ -809,6 +843,11 @@ namespace :redmine do
         end
         project.trackers << TRACKER_BUG unless project.trackers.include?(TRACKER_BUG)
         project.trackers << TRACKER_FEATURE unless project.trackers.include?(TRACKER_FEATURE)
+        project
+      end
+
+      def self.target_project_identifier(identifier)
+        project = find_or_create_project(identifier, true)
         @target_project = project.new_record? ? nil : project
         @target_project.reload
       end
@@ -856,7 +895,7 @@ namespace :redmine do
       exit
     end
 
-    puts "WARNING: a new project will be added to Redmine during this process."
+    puts "WARNING: New project(s) will be added to Redmine during this process."
     print "Are you sure you want to continue ? [y/N] "
     STDOUT.flush
     break unless STDIN.gets.match(/^y$/i)
@@ -887,7 +926,7 @@ namespace :redmine do
     end
     prompt('Trac database encoding', :default => 'UTF-8') {|encoding| TracMigrate.encoding encoding}
     puts 'For project identifiers: Only lower case letters (a-z), numbers, dashes and underscores are allowed, must start with a lower case letter.'
-    prompt('Target project identifier') {|identifier| TracMigrate.target_project_identifier identifier}
+    prompt('Target project identifier (not prefixed)') {|identifier| TracMigrate.target_project_identifier identifier}
     prompt('Target field name prefix', :default => '') {|prefix| TracMigrate.set_target_field_name_prefix prefix}
     print "Add prefix to resolution? [y/n]"
     prefix_resolution = STDIN.gets
@@ -902,6 +941,8 @@ namespace :redmine do
     prompt('Target field name for Trac ID (not prefixed)', :default => nil) {|target_trac_id_field_name| TracMigrate.set_target_trac_id_field_name target_trac_id_field_name}
     prompt('Trac component>Redmine category map file (tab-delimited)', :default => nil) {|map_file| TracMigrate.set_component_map_file map_file}
     prompt('Redmine category prefix', :default => '') {|target_category_prefix| TracMigrate.set_target_category_prefix target_category_prefix}
+    prompt('Trac milestone>Redmine project map file (tab-delimited)', :default => nil) {|map_file| TracMigrate.set_milestone_map_file map_file}
+    prompt('Redmine project prefix', :default => '') {|target_project_prefix| TracMigrate.set_target_project_prefix target_project_prefix}
                                                                                                                                        
     puts
 
