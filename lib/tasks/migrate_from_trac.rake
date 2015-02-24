@@ -450,6 +450,11 @@ namespace :redmine do
         end
 
         projects = Set.new [@target_project]
+        milestone_project_map.each do |milestone_name, project_name|
+          project = find_or_create_project(@target_project_prefix + project_name, false)
+          projects << project
+        end
+        
         version_map = {}
         TracMilestone.all.each do |milestone|
           print '.'
@@ -467,7 +472,6 @@ namespace :redmine do
           if target_project_identifier
             target_project_identifier = @target_project_prefix + target_project_identifier
             target_project = find_or_create_project(target_project_identifier, false)
-            projects << target_project
           end
           milestone_name = @target_version_prefix + encode(milestone.name[0, limit_for(Version, 'name')])
           v = Version.find(:first, :conditions => ["name = ?", milestone_name])
@@ -491,6 +495,12 @@ namespace :redmine do
         # Components
         print "Migrating components"
 
+        component_project_name_map = {}
+        if !@component_project_map_file.blank?
+          component_project_name_map_file = StrictTsv.new(@component_project_map_file)
+          component_project_name_map = component_project_name_map_file.parse_map
+        end
+
         category_name_map = {}
         if !@component_map_file.blank?
           category_name_map_file = StrictTsv.new(@component_map_file)
@@ -506,7 +516,7 @@ namespace :redmine do
             component_name = encode(component.name[0, limit_for(IssueCategory, 'name')])
             if !@component_map_file.blank?
               next if category_name_map[component_name].nil?
-              category_name = @target_category_prefix + category_name_map[component_name]
+              category_name = @target_category_prefix + category_name_map[component.name]
               c = IssueCategory.find(:first, :conditions => ["name = ? and project_id = ?", category_name, project.id])
               c ||= IssueCategory.new :project => project,
                                       :name => category_name
@@ -515,7 +525,7 @@ namespace :redmine do
                                     :name => @target_category_prefix + component_name
             end
             next unless c.save
-            issues_category_submap[component_name] = c
+            issues_category_submap[component.name] = c
             migrated_components += 1
           end
           issues_category_map[project] = issues_category_submap
@@ -593,7 +603,16 @@ namespace :redmine do
           STDOUT.flush
 
           fixed_version = version_map[ticket.milestone]
-          target_project = fixed_version.nil? ? @target_project : fixed_version.project
+          if fixed_version.nil?
+            if component_project_name_map[ticket.component].nil?
+              target_project = @target_project
+            else
+              project_name = @target_project_prefix + component_project_name_map[ticket.component]
+              target_project = find_or_create_project(project_name, false)
+            end
+          elsif 
+            target_project = fixed_version.project
+          end
           
           i = Issue.new :project => target_project,
                         :subject => encode(ticket.summary[0, limit_for(Issue, 'subject')]),
@@ -602,6 +621,9 @@ namespace :redmine do
                         :created_on => ticket.time,
                         :updated_on => ticket.changetime
           i.author = find_or_create_user(ticket.reporter)
+if issues_category_map[target_project].nil?
+  raise "#{target_project}"
+end
           i.category = issues_category_map[target_project][ticket.component] unless ticket.component.blank?
           i.fixed_version = fixed_version
           i.status = STATUS_MAPPING[ticket.status] || DEFAULT_STATUS
@@ -833,6 +855,10 @@ namespace :redmine do
         @milestone_map_file = map_file
       end
 
+      def self.set_component_project_map_file(map_file)
+        @component_project_map_file = map_file
+      end
+
       def self.set_target_project_prefix(project_prefix)
         @target_project_prefix = project_prefix
       end
@@ -948,6 +974,7 @@ namespace :redmine do
     prompt('Trac database encoding', :default => 'UTF-8') {|encoding| TracMigrate.encoding encoding}
     prompt('Trac component>Redmine category map file (tab-delimited)', :default => nil) {|map_file| TracMigrate.set_component_map_file map_file}
     prompt('Trac milestone>Redmine project map file (tab-delimited)', :default => nil) {|map_file| TracMigrate.set_milestone_map_file map_file}
+    prompt('Trac component>Redmine project map file (tab-delimited)', :default => nil) {|map_file| TracMigrate.set_component_project_map_file map_file}
     puts 'For project identifiers: Only lower case letters (a-z), numbers, dashes and underscores are allowed, must start with a lower case letter.'
     target_project_identifer = ''
     prompt('Target project identifier (not prefixed)') do |identifier|
