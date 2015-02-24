@@ -704,7 +704,6 @@ end
         Issue.connection.reset_pk_sequence!(Issue.table_name) if Issue.connection.respond_to?('reset_pk_sequence!')
         puts
 
- raise "let's save time"
         # Wiki
         print "Migrating wiki"
         if wiki.save
