@@ -273,7 +273,7 @@ namespace :redmine do
         self.table_name = :session_attribute
       end
 
-      def self.find_or_create_user(username, project_member = false)
+      def self.find_or_create_user(username, project = nil)
         return User.anonymous if username.blank?
 
         u = User.find_by_login(username)
@@ -304,14 +304,14 @@ namespace :redmine do
           u = User.first unless u.save
         end
         # Make sure user is a member of the project
-        if project_member && !u.member_of?(@target_project)
+        if project && !u.member_of?(project)
           role = DEFAULT_ROLE
           if u.admin
             role = ROLE_MAPPING['admin']
           elsif TracPermission.find_by_username_and_action(username, 'developer')
             role = ROLE_MAPPING['developer']
           end
-          Member.create(:user => u, :project => @target_project, :roles => [role])
+          Member.create(:user => u, :project => project, :roles => [role])
           u.reload
         end
         u
@@ -411,6 +411,12 @@ namespace :redmine do
         text
       end
 
+      def self.merge(destination, source)
+        source.each do |element|
+          destination << element unless destination.include?(element)
+        end
+      end        
+
       def self.migrate
         establish_connection
 
@@ -434,45 +440,16 @@ namespace :redmine do
         wiki = Wiki.new(:project => @target_project, :start_page => 'WikiStart')
         wiki_edit_count = 0
 
-        # Components
-        print "Migrating components"
-
-        category_name_map = {}
-        if !@component_map_file.blank?
-          category_name_map_file = StrictTsv.new(@component_map_file)
-          category_name_map = category_name_map_file.parse_map
-        end
-        
-        issues_category_map = {}
-        TracComponent.all.each do |component|
-          print '.'
-          STDOUT.flush
-          component_name = encode(component.name[0, limit_for(IssueCategory, 'name')])
-          if !@component_map_file.blank?
-            next if category_name_map[component_name].nil?
-            category_name = @target_category_prefix + category_name_map[component_name]
-            c = IssueCategory.find(:first, :conditions => ["name = ?", category_name])
-            c ||= IssueCategory.new :project => @target_project,
-                                    :name => category_name
-          else
-            c = IssueCategory.new :project => @target_project,
-                                  :name => @target_category_prefix + component_name
-          end
-          next unless c.save
-          issues_category_map[component_name] = c
-          migrated_components += 1
-        end
-        puts
-
         # Milestones
         print "Migrating milestones"
         if !@milestone_map_file.nil?
-          milestone_project_map_file = StrictTsv.new(@milestone_map_file)
+          milestone_project_map_file = StrictTsv.new(@milestone_map_file) # All target projects must be listed in the map file, even if it involves creating non-existent milestones
           milestone_project_map = milestone_project_map_file.parse_map
         else
           milestone_project_map = {}
         end
-        
+
+        projects = Set.new [@target_project]
         version_map = {}
         TracMilestone.all.each do |milestone|
           print '.'
@@ -490,8 +467,9 @@ namespace :redmine do
           if target_project_identifier
             target_project_identifier = @target_project_prefix + target_project_identifier
             target_project = find_or_create_project(target_project_identifier, false)
+            projects << target_project
           end
-          milestone_name = encode(milestone.name[0, limit_for(Version, 'name')])
+          milestone_name = @target_version_prefix + encode(milestone.name[0, limit_for(Version, 'name')])
           v = Version.find(:first, :conditions => ["name = ?", milestone_name])
           v ||= Version.new :project => target_project,
                           :name => milestone_name,
@@ -499,11 +477,50 @@ namespace :redmine do
                           :wiki_page_title => milestone.name.to_s,
                           :effective_date => milestone.completed
 
-          next unless v.save
+          if !v.save
+            puts "Unable to create a version with name '#{milestone_name}'!"
+            puts "\tproject valid?:#{milestone_name.valid?}"
+            puts "\tproject error:#{milestone_name.errors.messages}"
+            next
+          end
           version_map[milestone.name] = v
           migrated_milestones += 1
         end
         puts
+
+        # Components
+        print "Migrating components"
+
+        category_name_map = {}
+        if !@component_map_file.blank?
+          category_name_map_file = StrictTsv.new(@component_map_file)
+          category_name_map = category_name_map_file.parse_map
+        end
+        
+        issues_category_map = {}
+        projects.each do |project|
+          issues_category_submap = {}
+          TracComponent.all.each do |component|
+            print '.'
+            STDOUT.flush
+            component_name = encode(component.name[0, limit_for(IssueCategory, 'name')])
+            if !@component_map_file.blank?
+              next if category_name_map[component_name].nil?
+              category_name = @target_category_prefix + category_name_map[component_name]
+              c = IssueCategory.find(:first, :conditions => ["name = ? and project_id = ?", category_name, project.id])
+              c ||= IssueCategory.new :project => project,
+                                      :name => category_name
+            else
+              c = IssueCategory.new :project => project,
+                                    :name => @target_category_prefix + component_name
+            end
+            next unless c.save
+            issues_category_submap[component_name] = c
+            migrated_components += 1
+          end
+          issues_category_map[project] = issues_category_submap
+          puts
+        end
 
         # Custom fields
         # TODO: read trac.ini instead
@@ -523,7 +540,7 @@ namespace :redmine do
 
           next if f.new_record?
           f.trackers = Tracker.all
-          f.projects << @target_project
+          merge(f.projects, projects)
           custom_field_map[field.name] = f
         end
         puts
@@ -539,7 +556,7 @@ namespace :redmine do
                                  :field_format => 'list',
                                  :is_filter => true) if r.nil?
         r.trackers = Tracker.all
-        r.projects << @target_project
+        merge(r.projects, projects)
         r.possible_values = (r.possible_values + %w(fixed invalid wontfix duplicate worksforme)).flatten.compact.uniq
         r.save!
         custom_field_map['resolution'] = r
@@ -551,7 +568,7 @@ namespace :redmine do
                                                     :field_format => 'int')
           if !trac_id_field.new_record?
             trac_id_field.trackers = Tracker.all
-            trac_id_field.projects << @target_project
+            merge(trac_id_field.projects, projects)
           end
 
           custom_field_map['id'] = trac_id_field
@@ -564,7 +581,7 @@ namespace :redmine do
                                                          :field_format => 'string')
         if !trac_component_field.new_record?
           trac_component_field.trackers = Tracker.all
-          trac_component_field.projects << @target_project
+          merge(trac_component_field.projects, projects)
         end
           
         custom_field_map['component'] = trac_component_field
@@ -585,7 +602,7 @@ namespace :redmine do
                         :created_on => ticket.time,
                         :updated_on => ticket.changetime
           i.author = find_or_create_user(ticket.reporter)
-          i.category = issues_category_map[ticket.component] unless ticket.component.blank?
+          i.category = issues_category_map[target_project][ticket.component] unless ticket.component.blank?
           i.fixed_version = fixed_version
           i.status = STATUS_MAPPING[ticket.status] || DEFAULT_STATUS
           i.tracker = TRACKER_MAPPING[ticket.ticket_type] || DEFAULT_TRACKER
@@ -596,7 +613,7 @@ namespace :redmine do
 
           # Owner
           unless ticket.owner.blank?
-            i.assigned_to = find_or_create_user(ticket.owner, true)
+            i.assigned_to = find_or_create_user(ticket.owner, target_project)
             Time.fake(ticket.changetime) { i.save }
           end
 
@@ -820,6 +837,10 @@ namespace :redmine do
         @target_project_prefix = project_prefix
       end
 
+      def self.set_target_version_prefix(version_prefix)
+        @target_version_prefix = version_prefix
+      end
+
       def self.find_or_create_project(identifier, warning)
         project = Project.find_by_identifier(identifier)
         if !project
@@ -925,12 +946,22 @@ namespace :redmine do
       prompt('Trac database password') {|password| TracMigrate.set_trac_db_password password}
     end
     prompt('Trac database encoding', :default => 'UTF-8') {|encoding| TracMigrate.encoding encoding}
+    prompt('Trac component>Redmine category map file (tab-delimited)', :default => nil) {|map_file| TracMigrate.set_component_map_file map_file}
+    prompt('Trac milestone>Redmine project map file (tab-delimited)', :default => nil) {|map_file| TracMigrate.set_milestone_map_file map_file}
     puts 'For project identifiers: Only lower case letters (a-z), numbers, dashes and underscores are allowed, must start with a lower case letter.'
-    prompt('Target project identifier (not prefixed)') {|identifier| TracMigrate.target_project_identifier identifier}
-    prompt('Target field name prefix', :default => '') {|prefix| TracMigrate.set_target_field_name_prefix prefix}
-    print "Add prefix to resolution? [y/n]"
+    target_project_identifer = ''
+    prompt('Target project identifier (not prefixed)') do |identifier|
+      target_project_identifer = identifier
+      TracMigrate.target_project_identifier identifier
+    end
+    defaultPrefix = target_project_identifer + '_'
+    prompt('Target field name prefix', :default => defaultPrefix) do |prefix|
+      defaultPrefix = prefix
+      TracMigrate.set_target_field_name_prefix prefix
+    end
+    print "Add prefix to resolution? [Y/n]"
     prefix_resolution = STDIN.gets
-    if prefix_resolution.match(/^y$/i)
+    if prefix_resolution.match(/^y?$/i)
       TracMigrate.set_prefix_resolution true
     elsif prefix_resolution.match(/^n$/i)
       TracMigrate.set_prefix_resolution false
@@ -938,11 +969,10 @@ namespace :redmine do
       puts "Enter y or n!"
       break
     end
-    prompt('Target field name for Trac ID (not prefixed)', :default => nil) {|target_trac_id_field_name| TracMigrate.set_target_trac_id_field_name target_trac_id_field_name}
-    prompt('Trac component>Redmine category map file (tab-delimited)', :default => nil) {|map_file| TracMigrate.set_component_map_file map_file}
-    prompt('Redmine category prefix', :default => '') {|target_category_prefix| TracMigrate.set_target_category_prefix target_category_prefix}
-    prompt('Trac milestone>Redmine project map file (tab-delimited)', :default => nil) {|map_file| TracMigrate.set_milestone_map_file map_file}
-    prompt('Redmine project prefix', :default => '') {|target_project_prefix| TracMigrate.set_target_project_prefix target_project_prefix}
+    prompt('Target field name for Trac ID (not prefixed)', :default => defaultPrefix + "id") {|target_trac_id_field_name| TracMigrate.set_target_trac_id_field_name target_trac_id_field_name}
+    prompt('Redmine category prefix', :default => defaultPrefix) {|target_category_prefix| TracMigrate.set_target_category_prefix target_category_prefix}
+    prompt('Redmine project prefix', :default => defaultPrefix) {|target_project_prefix| TracMigrate.set_target_project_prefix target_project_prefix}
+    prompt('Redmine version prefix', :default => defaultPrefix) {|target_version_prefix| TracMigrate.set_target_version_prefix target_version_prefix}
                                                                                                                                        
     puts
 
