@@ -474,7 +474,7 @@ namespace :redmine do
             target_project = find_or_create_project(target_project_identifier, false)
           end
           milestone_name = @target_version_prefix + encode(milestone.name[0, limit_for(Version, 'name')])
-          v = Version.find(:first, :conditions => ["name = ?", milestone_name])
+          v = Version.find(:first, :conditions => ["name = ? and project_id = ?", milestone_name, target_project.id])
           v ||= Version.new :project => target_project,
                           :name => milestone_name,
                           :description => nil,
@@ -622,13 +622,13 @@ namespace :redmine do
                         :updated_on => ticket.changetime
           i.author = find_or_create_user(ticket.reporter)
 if issues_category_map[target_project].nil?
-  raise "#{target_project}"
+  raise "#{target_project} was not found in issues category map"
 end
           i.category = issues_category_map[target_project][ticket.component] unless ticket.component.blank?
           i.fixed_version = fixed_version
           i.status = STATUS_MAPPING[ticket.status] || DEFAULT_STATUS
           i.tracker = TRACKER_MAPPING[ticket.ticket_type] || DEFAULT_TRACKER
-          i.id = ticket.id unless Issue.exists?(ticket.id)
+#         i.id = ticket.id unless Issue.exists?(ticket.id) # disabled because there may be a problem with Redmine if we do this.
           next unless Time.fake(ticket.changetime) { i.save }
           TICKET_MAP[ticket.id] = i.id
           migrated_tickets += 1
@@ -862,6 +862,10 @@ end
         @target_project_prefix = project_prefix
       end
 
+      def self.set_humanize_project(humanize_project)
+        @humanize_project = humanize_project
+      end
+
       def self.set_target_version_prefix(version_prefix)
         @target_version_prefix = version_prefix
       end
@@ -870,7 +874,7 @@ end
         project = Project.find_by_identifier(identifier)
         if !project
           # create the target project
-          project = Project.new :name => identifier.humanize,
+          project = Project.new :name => @humanize_project ? identifier.humanize : identifier,
                                 :description => ''
           project.identifier = identifier
           if !project.save
@@ -995,10 +999,22 @@ end
       puts "Enter y or n!"
       break
     end
+    defaultPrefix2 = ''
     prompt('Target field name for Trac ID (not prefixed)', :default => defaultPrefix + "id") {|target_trac_id_field_name| TracMigrate.set_target_trac_id_field_name target_trac_id_field_name}
-    prompt('Redmine category prefix', :default => defaultPrefix) {|target_category_prefix| TracMigrate.set_target_category_prefix target_category_prefix}
-    prompt('Redmine project prefix', :default => defaultPrefix) {|target_project_prefix| TracMigrate.set_target_project_prefix target_project_prefix}
-    prompt('Redmine version prefix', :default => defaultPrefix) {|target_version_prefix| TracMigrate.set_target_version_prefix target_version_prefix}
+    prompt('Redmine category prefix', :default => defaultPrefix2) {|target_category_prefix| TracMigrate.set_target_category_prefix target_category_prefix}
+    prompt('Redmine project prefix', :default => defaultPrefix2) {|target_project_prefix| TracMigrate.set_target_project_prefix target_project_prefix}
+    print 'Humanize Redmine project? [Y/n]'
+    humanize_project = STDIN.gets
+    if humanize_project.match(/^y?$/i)
+      TracMigrate.set_humanize_project true
+    elsif humanize_project.match(/^n$/i)
+      TracMigrate.set_humanize_project false
+    else
+      puts "Enter y or n!"
+      break
+    end
+      
+    prompt('Redmine version prefix', :default => defaultPrefix2) {|target_version_prefix| TracMigrate.set_target_version_prefix target_version_prefix}
                                                                                                                                        
     puts
 
