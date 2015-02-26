@@ -18,6 +18,7 @@
 require 'active_record'
 require 'iconv' if RUBY_VERSION < '1.9'
 require 'pp'
+require 'uri'
 
 namespace :redmine do
   desc 'Trac migration script'
@@ -194,10 +195,11 @@ namespace :redmine do
         def trac_fullpath
           attachment_type = read_attribute(:type)
           #replace exotic characters with their hex representation to avoid invalid filenames
-          trac_file = filename.gsub( /[^a-zA-Z0-9\-_\.!~*']/n ) do |x|
-            codepoint = RUBY_VERSION < '1.9' ? x[0] : x.codepoints.to_a[0]
-            sprintf('%%%02x', codepoint)
-          end
+#          trac_file = filename.gsub( /[^a-zA-Z0-9\-_\.!~*']/n ) do |x|
+#            codepoint = RUBY_VERSION < '1.9' ? x[0] : x.codepoints.to_a[0]
+#            sprintf('%%%02x', codepoint)
+          #          end
+          trac_file = URI.escape(filename)
           trac_id = read_attribute(:id)
           "#{TracMigrate.trac_attachments_directory}/#{attachment_type}/#{trac_id}/#{trac_file}"
         end
