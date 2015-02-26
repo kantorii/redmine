@@ -195,10 +195,10 @@ namespace :redmine do
         def trac_fullpath
           attachment_type = read_attribute(:type)
           trac_file = URI.escape(filename)
-          # Somehow trac escapes parentheses ()
-          trac_file = trac_file.gsub( /[()]/ ) do |x|
+          # trac escapes more characters
+          trac_file = trac_file.gsub( /[()$\[\]]/ ) do |x|
             codepoint = x.codepoints[0]
-            sprintf('%%%02x', codepoint)
+            sprintf('%%%02X', codepoint)
           end
           trac_id = read_attribute(:id)
           "#{TracMigrate.trac_attachments_directory}/#{attachment_type}/#{trac_id}/#{trac_file}"
@@ -736,7 +736,7 @@ end
             next if TRAC_WIKI_PAGES.include?(page.name)
             wiki_edit_count += 1
             print '.'
-            #puts page.name
+            puts page.name
             STDOUT.flush
             p = wiki.find_or_new_page(page.name)
             p.content = WikiContent.new(:page => p) if p.new_record?
