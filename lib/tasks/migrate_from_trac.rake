@@ -190,7 +190,7 @@ namespace :redmine do
           read_attribute(:description).to_s.slice(0,255)
         end
 
-      private
+#      private
         def trac_fullpath
           attachment_type = read_attribute(:type)
           #replace exotic characters with their hex representation to avoid invalid filenames
@@ -198,7 +198,8 @@ namespace :redmine do
             codepoint = RUBY_VERSION < '1.9' ? x[0] : x.codepoints.to_a[0]
             sprintf('%%%02x', codepoint)
           end
-          "#{TracMigrate.trac_attachments_directory}/#{attachment_type}/#{id}/#{trac_file}"
+          trac_id = read_attribute(:id)
+          "#{TracMigrate.trac_attachments_directory}/#{attachment_type}/#{trac_id}/#{trac_file}"
         end
       end
 
@@ -298,7 +299,7 @@ namespace :redmine do
                        :lastname => ln[0, limit_for(User, 'lastname')]
 
           u.login = username[0, User::LOGIN_LENGTH_LIMIT].gsub(/[^a-z0-9_\-@\.]/i, '-')
-          u.password = 'trac'
+          u.password = @default_password
           u.admin = true if TracPermission.find_by_username_and_action(username, 'admin')
           # finally, a default user is used if the new user is not valid
           u = User.first unless u.save
@@ -483,8 +484,8 @@ namespace :redmine do
 
           if !v.save
             puts "Unable to create a version with name '#{milestone_name}'!"
-            puts "\tproject valid?:#{milestone_name.valid?}"
-            puts "\tproject error:#{milestone_name.errors.messages}"
+            puts "\tversion valid?:#{v.valid?}"
+            puts "\tversion error:#{v.errors.messages}"
             next
           end
           version_map[milestone.name] = v
@@ -524,7 +525,12 @@ namespace :redmine do
               c = IssueCategory.new :project => project,
                                     :name => @target_category_prefix + component_name
             end
-            next unless c.save
+            if !c.save
+              puts "Unable to create a category with name '#{category_name}'!"
+              puts "\tcategory valid?:#{c.valid?}"
+              puts "\tcategory error:#{c.errors.messages}"
+              next
+            end
             issues_category_submap[component.name] = c
             migrated_components += 1
           end
@@ -669,7 +675,10 @@ end
 
           # Attachments
           ticket.attachments.each do |attachment|
-            next unless attachment.exist?
+            if !attachment.exist?
+              puts " doesn't exist:" + attachment.filename + ':' + attachment.trac_fullpath
+              next
+            end
             attachment.open {
               a = Attachment.new :created_on => attachment.time
               a.file = attachment
@@ -725,15 +734,27 @@ end
 
             # Attachments
             page.attachments.each do |attachment|
-              next unless attachment.exist?
-              next if p.attachments.find_by_filename(attachment.filename.gsub(/^.*(\\|\/)/, '').gsub(/[^\w\.\-]/,'_')) #add only once per page
+              if !attachment.exist?
+                puts " doesn't exist:" + attachment.filename
+                next
+              end
+              if p.attachments.find_by_filename(attachment.filename.gsub(/^.*(\\|\/)/, '').gsub(/[^\w\.\-]/,'_')) #add only once per page
+                puts '>'
+                next
+              end
               attachment.open {
                 a = Attachment.new :created_on => attachment.time
                 a.file = attachment
                 a.author = find_or_create_user(attachment.author)
                 a.description = attachment.description
                 a.container = p
-                migrated_wiki_attachments += 1 if a.save
+                if !a.save
+                  puts "Unable to create an attachment with file name '#{attachment.filename}'!"
+                  puts "\tvalid?:#{a.valid?}"
+                  puts "\terror:#{a.errors.messages}"
+                else
+                  migrated_wiki_attachments += 1
+                end
               }
             end
           end
@@ -868,6 +889,10 @@ end
 
       def self.set_target_version_prefix(version_prefix)
         @target_version_prefix = version_prefix
+      end
+
+      def self.set_default_password(password)
+        @default_password = password
       end
 
       def self.find_or_create_project(identifier, warning)
@@ -1013,8 +1038,8 @@ end
       puts "Enter y or n!"
       break
     end
-      
     prompt('Redmine version prefix', :default => defaultPrefix2) {|target_version_prefix| TracMigrate.set_target_version_prefix target_version_prefix}
+    prompt('Default password for users', :default => '') {|password| TracMigrate.set_default_password password}
                                                                                                                                        
     puts
 
