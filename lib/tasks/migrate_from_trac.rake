@@ -731,6 +731,7 @@ end
         # Wiki
         print "Migrating wiki"
         if wiki.save
+          page_history = {}
           TracWikiPage.order('name, version').all.each do |page|
             # Do not migrate Trac manual wiki pages
             next if TRAC_WIKI_PAGES.include?(page.name)
@@ -738,6 +739,13 @@ end
             print '.'
             puts page.name
             STDOUT.flush
+            titleized_name = Wiki.titleize(page.name)
+            name_in_history = page_history[titleized_name]
+            if name_in_history.nil?
+              page_history[titleized_name] = page.name
+            elsif name_in_history != page.name
+              raise "name collision #{page.name}->#{titleized_name}<-#{name_in_history}"
+            end
             p = wiki.find_or_new_page(page.name)
             p.content = WikiContent.new(:page => p) if p.new_record?
             p.content.text = page.text
@@ -756,12 +764,18 @@ end
             migrated_wiki_edits += 1
 
             # Attachments
+            attachment_history = {}
             page.attachments.each do |attachment|
               if !attachment.exist?
-                puts " doesn't exist:" + attachment.filename + ':' + attachment.trac_fullpath
+                raise " doesn't exist:" + attachment.filename + ':' + attachment.trac_fullpath
                 next
               end
-              if p.attachments.find_by_filename(sanitize_filename(attachment.filename)) #add only once per page
+              sanitized_filename = sanitize_filename(attachment.filename)
+              attachment_in_history = attachment_history[sanitized_filename]
+              if attachment_in_history
+                raise "filename collision: #{attachment.filename}->#{sanitized_filename}<-#{attachment_in_history}"
+              end
+              if p.attachments.find_by_filename(sanitized_filename) #add only once per page
                 print ">"
                 #puts "#{p.title}>#{attachment.filename}"
                 next
