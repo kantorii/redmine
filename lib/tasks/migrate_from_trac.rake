@@ -743,7 +743,14 @@ end
             p.content.text = page.text
             p.content.author = find_or_create_user(page.author) unless page.author.blank? || page.author == 'trac'
             p.content.comments = page.comment
-            Time.fake(page.time) { p.new_record? ? p.save : p.content.save }
+            Time.fake(page.time) do
+              if p.new_record?
+                p.save
+              else
+                print '^'
+                p.content.save
+              end
+            end
 
             next if p.content.new_record?
             migrated_wiki_edits += 1
