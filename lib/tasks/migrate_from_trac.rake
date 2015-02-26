@@ -737,7 +737,7 @@ end
             # Attachments
             page.attachments.each do |attachment|
               if !attachment.exist?
-                puts " doesn't exist:" + attachment.filename
+                puts " doesn't exist:" + attachment.filename + ':' + attachment.trac_fullpath
                 next
               end
               if p.attachments.find_by_filename(attachment.filename.gsub(/^.*(\\|\/)/, '').gsub(/[^\w\.\-]/,'_')) #add only once per page
