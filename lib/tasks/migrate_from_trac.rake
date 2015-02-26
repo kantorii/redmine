@@ -194,12 +194,12 @@ namespace :redmine do
 #      private
         def trac_fullpath
           attachment_type = read_attribute(:type)
-          #replace exotic characters with their hex representation to avoid invalid filenames
-#          trac_file = filename.gsub( /[^a-zA-Z0-9\-_\.!~*']/n ) do |x|
-#            codepoint = RUBY_VERSION < '1.9' ? x[0] : x.codepoints.to_a[0]
-#            sprintf('%%%02x', codepoint)
-          #          end
           trac_file = URI.escape(filename)
+          # Somehow trac escapes parentheses ()
+          trac_file = trac_file.gsub( /[()]/ ) do |x|
+            codepoint = x.codepoints[0]
+            sprintf('%%%02x', codepoint)
+          end
           trac_id = read_attribute(:id)
           "#{TracMigrate.trac_attachments_directory}/#{attachment_type}/#{trac_id}/#{trac_file}"
         end
