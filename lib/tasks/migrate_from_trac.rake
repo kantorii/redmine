@@ -418,7 +418,16 @@ namespace :redmine do
         source.each do |element|
           destination << element unless destination.include?(element)
         end
-      end        
+      end
+
+      # taken and modified from app/models/attachment.rb
+      def self.sanitize_filename(value)
+        # get only the filename, not the whole path
+        just_filename = value.gsub(/\A.*(\\|\/)/m, '')
+
+        # Finally, replace invalid characters with underscore
+        just_filename.gsub(/[\/\?\%\*\:\|\"\'<>\n\r]+/, '_')
+      end
 
       def self.migrate
         establish_connection
@@ -604,6 +613,8 @@ namespace :redmine do
           
         custom_field_map['component'] = trac_component_field
 
+#puts "saving time"
+#if false
         # Tickets
         print "Migrating tickets"
         TracTicket.find_each(:batch_size => 200) do |ticket|
@@ -681,6 +692,7 @@ end
               puts " doesn't exist:" + attachment.filename + ':' + attachment.trac_fullpath
               next
             end
+            puts "#{i.id}+#{attachment.filename}"
             attachment.open {
               a = Attachment.new :created_on => attachment.time
               a.file = attachment
@@ -710,6 +722,7 @@ end
           i.custom_field_values = custom_values
           i.save_custom_field_values
         end
+#end
 
         # update issue id sequence if needed (postgresql)
         Issue.connection.reset_pk_sequence!(Issue.table_name) if Issue.connection.respond_to?('reset_pk_sequence!')
@@ -723,6 +736,7 @@ end
             next if TRAC_WIKI_PAGES.include?(page.name)
             wiki_edit_count += 1
             print '.'
+            #puts page.name
             STDOUT.flush
             p = wiki.find_or_new_page(page.name)
             p.content = WikiContent.new(:page => p) if p.new_record?
@@ -740,10 +754,12 @@ end
                 puts " doesn't exist:" + attachment.filename + ':' + attachment.trac_fullpath
                 next
               end
-              if p.attachments.find_by_filename(attachment.filename.gsub(/^.*(\\|\/)/, '').gsub(/[^\w\.\-]/,'_')) #add only once per page
-                puts '>'
+              if p.attachments.find_by_filename(sanitize_filename(attachment.filename)) #add only once per page
+                print ">"
+                #puts "#{p.title}>#{attachment.filename}"
                 next
               end
+              puts "#{p.title}+#{attachment.filename}"
               attachment.open {
                 a = Attachment.new :created_on => attachment.time
                 a.file = attachment
