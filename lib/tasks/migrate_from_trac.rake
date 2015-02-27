@@ -25,6 +25,19 @@ namespace :redmine do
   task :migrate_from_trac => :environment do
 
     module TracMigrate
+      class DoubleOut
+        def puts(arg)
+          STDOUT.puts arg
+          STDERR.puts arg
+        end
+        def print(arg)
+          STDOUT.print arg
+          STDERR.print arg
+        end
+      end
+
+      DOUBLEOUT = DoubleOut.new
+
         TICKET_MAP = []
 
         DEFAULT_STATUS = IssueStatus.default
@@ -444,6 +457,7 @@ namespace :redmine do
         migrated_custom_values = 0
         migrated_ticket_attachments = 0
         migrated_wiki_edits = 0
+        migrated_wiki_pages = 0
         migrated_wiki_attachments = 0
 
         #Wiki system initializing...
@@ -453,8 +467,7 @@ namespace :redmine do
         wiki_edit_count = 0
 
         # Milestones
-        puts "Migrating milestones"
-        STDERR.puts "Migrating milestones"
+        DOUBLEOUT.puts "Migrating milestones"
         if !@milestone_map_file.nil?
           milestone_project_map_file = StrictTsv.new(@milestone_map_file) # All target projects must be listed in the map file, even if it involves creating non-existent milestones
           milestone_project_map = milestone_project_map_file.parse_map
@@ -506,8 +519,7 @@ namespace :redmine do
         puts
 
         # Components
-        puts "Migrating components"
-        STDERR.puts "Migrating components"
+        DOUBLEOUT.puts "Migrating components"
 
         component_project_name_map = {}
         if !@component_project_map_file.blank?
@@ -553,8 +565,7 @@ namespace :redmine do
 
         # Custom fields
         # TODO: read trac.ini instead
-        puts "Migrating custom fields"
-        STDERR.puts "Migrating custom fields"
+        DOUBLEOUT.puts "Migrating custom fields"
         custom_field_map = {}
         TracTicketCustom.find_by_sql("SELECT DISTINCT name FROM #{TracTicketCustom.table_name}").each do |field|
           print '.'
@@ -619,8 +630,7 @@ namespace :redmine do
 #puts "saving time"
 #if false
         # Tickets
-        puts "Migrating tickets"
-        STDERR.puts "Migrating tickets"
+        DOUBLEOUT.puts "Migrating tickets"
         TracTicket.find_each(:batch_size => 200) do |ticket|
           print '.'
           STDOUT.flush
@@ -733,17 +743,18 @@ end
         puts
 
         # Wiki
-        puts "Migrating wiki"
-        STDERR.puts "Migrating wiki"
+        DOUBLEOUT.puts "Migrating wiki"
         if wiki.save
           page_history = {}
+          page_set = Set.new
           TracWikiPage.order('name, version').all.each do |page|
             # Do not migrate Trac manual wiki pages
             next if TRAC_WIKI_PAGES.include?(page.name)
             wiki_edit_count += 1
             print '.'
-            puts page.name
+            DOUBLEOUT.puts page.name
             STDOUT.flush
+            page_set << page.name
             titleized_name = Wiki.titleize(page.name)
             name_in_history = page_history[titleized_name]
             if name_in_history.nil?
@@ -758,6 +769,7 @@ end
             p.content.comments = page.comment
             Time.fake(page.time) do
               if p.new_record?
+                migrated_wiki_pages += 1
                 p.save
               else
                 print '^'
@@ -812,20 +824,14 @@ end
         puts
 
         puts
-        puts "Components:      #{migrated_components}/#{TracComponent.count}"
-        STDERR.puts "Components:      #{migrated_components}/#{TracComponent.count}"
-        puts "Milestones:      #{migrated_milestones}/#{TracMilestone.count}"
-        STDERR.puts "Milestones:      #{migrated_milestones}/#{TracMilestone.count}"
-        puts "Tickets:         #{migrated_tickets}/#{TracTicket.count}"
-        STDERR.puts "Tickets:         #{migrated_tickets}/#{TracTicket.count}"
-        puts "Ticket files:    #{migrated_ticket_attachments}/" + TracAttachment.count(:conditions => {:type => 'ticket'}).to_s
-        STDERR.puts "Ticket files:    #{migrated_ticket_attachments}/" + TracAttachment.count(:conditions => {:type => 'ticket'}).to_s
-        puts "Custom values:   #{migrated_custom_values}/#{TracTicketCustom.count}"
-        STDERR.puts "Custom values:   #{migrated_custom_values}/#{TracTicketCustom.count}"
-        puts "Wiki edits:      #{migrated_wiki_edits}/#{wiki_edit_count}"
-        STDERR.puts "Wiki edits:      #{migrated_wiki_edits}/#{wiki_edit_count}"
-        puts "Wiki files:      #{migrated_wiki_attachments}/" + TracAttachment.count(:conditions => {:type => 'wiki'}).to_s
-        STDERR.puts "Wiki files:      #{migrated_wiki_attachments}/" + TracAttachment.count(:conditions => {:type => 'wiki'}).to_s
+        DOUBLEOUT.puts "Components:      #{migrated_components}/#{TracComponent.count}"
+        DOUBLEOUT.puts "Milestones:      #{migrated_milestones}/#{TracMilestone.count}"
+        DOUBLEOUT.puts "Tickets:         #{migrated_tickets}/#{TracTicket.count}"
+        DOUBLEOUT.puts "Ticket files:    #{migrated_ticket_attachments}/" + TracAttachment.count(:conditions => {:type => 'ticket'}).to_s
+        DOUBLEOUT.puts "Custom values:   #{migrated_custom_values}/#{TracTicketCustom.count}"
+        DOUBLEOUT.puts "Wiki pages:      #{migrated_wiki_pages}/" + page_set.size.to_s
+        DOUBLEOUT.puts "Wiki edits:      #{migrated_wiki_edits}/#{wiki_edit_count}"
+        DOUBLEOUT.puts "Wiki files:      #{migrated_wiki_attachments}/" + TracAttachment.count(:conditions => {:type => 'wiki'}).to_s
       end
 
       def self.limit_for(klass, attribute)
