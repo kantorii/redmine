@@ -258,10 +258,10 @@ namespace :redmine do
       end
 
       TRAC_WIKI_PAGES = %w(InterMapTxt InterTrac InterWiki RecentChanges SandBox TracAccessibility TracAdmin TracBackup TracBrowser TracCgi TracChangeset \
-                           TracEnvironment TracFastCgi TracGuide TracImport TracIni TracInstall TracInterfaceCustomization \
-                           TracLinks TracLogging TracModPython TracNotification TracPermissions TracPlugins TracQuery \
-                           TracReports TracRevisionLog TracRoadmap TracRss TracSearch TracStandalone TracSupport TracSyntaxColoring TracTickets \
-                           TracTicketsCustomFields TracTimeline TracUnicode TracUpgrade TracWiki WikiDeletePage WikiFormatting \
+                           TracEnvironment TracFineGrainedPermissions TracFastCgi TracGuide TracImport TracIni TracInstall TracInterfaceCustomization \
+                           TracLinks TracLogging TracModPython TracModWSGI TracNavigation TracNotification TracPermissions TracPlugins TracQuery \
+                           TracReports TracRepositoryAdmin TracRevisionLog TracRoadmap TracRss TracSearch TracStandalone TracSupport TracSyntaxColoring TracTickets \
+                           TracTicketsCustomFields TracTimeline TracUnicode TracUpgrade TracWiki TracWorkflow WikiDeletePage WikiFormatting \
                            WikiHtml WikiMacros WikiNewPage WikiPageNames WikiProcessors WikiRestructuredText WikiRestructuredTextLinks \
                            CamelCase TitleIndex)
 
@@ -508,7 +508,7 @@ namespace :redmine do
                           :effective_date => milestone.completed
 
           if !v.save
-            STDERR.puts "Unable to create a version with name '#{milestone_name}'!"
+            STDERR.puts "ERROR: Unable to create a version with name '#{milestone_name}'!"
             STDERR.puts "\tversion valid?:#{v.valid?}"
             STDERR.puts "\tversion error:#{v.errors.messages}"
             next
@@ -551,7 +551,7 @@ namespace :redmine do
                                     :name => @target_category_prefix + component_name
             end
             if !c.save
-              STDERR.puts "Unable to create a category with name '#{category_name}'!"
+              STDERR.puts "ERROR: Unable to create a category with name '#{category_name}'!"
               STDERR.puts "\tcategory valid?:#{c.valid?}"
               STDERR.puts "\tcategory error:#{c.errors.messages}"
               next
@@ -703,7 +703,7 @@ end
           # Attachments
           ticket.attachments.each do |attachment|
             if !attachment.exist?
-              STDERR.puts " doesn't exist:" + attachment.filename + ':' + attachment.trac_fullpath
+              STDERR.puts "ERROR: doesn't exist:" + attachment.filename + ':' + attachment.trac_fullpath
               next
             end
             STDERR.puts "#{i.id}+#{attachment.filename}"
@@ -760,7 +760,7 @@ end
             if name_in_history.nil?
               page_history[titleized_name] = page.name
             elsif name_in_history != page.name
-              STDERR.puts "name collision #{page.name}->#{titleized_name}<-#{name_in_history}"
+              STDERR.puts "ERROR: page name collision #{page.name}->#{titleized_name}<-#{name_in_history}"
             end
             p = wiki.find_or_new_page(page.name)
             p.content = WikiContent.new(:page => p) if p.new_record?
@@ -790,7 +790,7 @@ end
               sanitized_filename = sanitize_filename(attachment.filename)
               attachment_in_history = attachment_history[sanitized_filename]
               if attachment_in_history
-                STDERR.puts "filename collision: #{attachment.filename}->#{sanitized_filename}<-#{attachment_in_history}"
+                STDERR.puts "ERROR: filename collision: #{attachment.filename}->#{sanitized_filename}<-#{attachment_in_history}"
               end
               if p.attachments.find_by_filename(sanitized_filename) #add only once per page
                 print ">"
@@ -805,7 +805,7 @@ end
                 a.description = attachment.description
                 a.container = p
                 if !a.save
-                  STDERR.puts "Unable to create an attachment with file name '#{attachment.filename}'!"
+                  STDERR.puts "ERROR: Unable to create an attachment with file name '#{attachment.filename}'!"
                   STDERR.puts "\tvalid?:#{a.valid?}"
                   STDERR.puts "\terror:#{a.errors.messages}"
                 else
@@ -857,7 +857,7 @@ end
         raise "#{trac_attachments_directory} doesn't exist!" unless File.directory?(trac_attachments_directory)
         @@trac_directory
       rescue Exception => e
-        STDERR.puts e
+        STDERR.puts "ERROR: " + e.to_s
         return false
       end
 
@@ -872,7 +872,7 @@ end
         raise "#{trac_db_path} doesn't exist!" if %w(sqlite3).include?(adapter) && !File.exist?(trac_db_path)
         @@trac_adapter = adapter
       rescue Exception => e
-        STDERR.puts e
+        STDERR.puts "ERROR: " + e.to_s
         return false
       end
 
@@ -960,7 +960,7 @@ end
                                 :description => ''
           project.identifier = identifier
           if !project.save
-            STDERR.puts "Unable to create a project with identifier '#{identifier}'!"
+            STDERR.puts "ERROR: Unable to create a project with identifier '#{identifier}'!"
             STDERR.puts "\tproject valid?:#{project.valid?}"
             STDERR.puts "\tproject error:#{project.errors.messages}"
           end
@@ -1020,7 +1020,7 @@ end
 
     puts
     if Redmine::DefaultData::Loader.no_data?
-      STDERR.puts "Redmine configuration need to be loaded before importing data."
+      STDERR.puts "ERROR: Redmine configuration need to be loaded before importing data."
       STDERR.puts "Please, run this first:"
       STDERR.puts
       STDERR.puts "  rake redmine:load_default_data RAILS_ENV=\"#{ENV['RAILS_ENV']}\""
