@@ -333,9 +333,21 @@ namespace :redmine do
         u
       end
 
+      def self.rewrite_tickets(text)
+        text = text.gsub(/#(\d+)/) do |s|
+          if $1.length < 10
+#            TICKET_MAP[$1.to_i] ||= $1
+            "\##{TICKET_MAP[$1.to_i] || $1}"
+          else
+            s
+          end
+        end
+      end        
+
       # Basic wiki syntax conversion
       def self.convert_wiki_text(text)
         unless @convert_wiki
+          text = rewrite_tickets(text) # do this because # will be converted to links in Redmine
           return text
         end
         
@@ -376,14 +388,7 @@ namespace :redmine do
         # Revisions links
         text = text.gsub(/\[(\d+)\]/, 'r\1')
         # Ticket number re-writing
-        text = text.gsub(/#(\d+)/) do |s|
-          if $1.length < 10
-#            TICKET_MAP[$1.to_i] ||= $1
-            "\##{TICKET_MAP[$1.to_i] || $1}"
-          else
-            s
-          end
-        end
+        text = rewrite_tickets(text)
         # We would like to convert the Code highlighting too
         # This will go into the next line.
         shebang_line = false
