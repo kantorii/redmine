@@ -453,7 +453,8 @@ namespace :redmine do
         wiki_edit_count = 0
 
         # Milestones
-        print "Migrating milestones"
+        puts "Migrating milestones"
+        STDERR.puts "Migrating milestones"
         if !@milestone_map_file.nil?
           milestone_project_map_file = StrictTsv.new(@milestone_map_file) # All target projects must be listed in the map file, even if it involves creating non-existent milestones
           milestone_project_map = milestone_project_map_file.parse_map
@@ -494,9 +495,9 @@ namespace :redmine do
                           :effective_date => milestone.completed
 
           if !v.save
-            puts "Unable to create a version with name '#{milestone_name}'!"
-            puts "\tversion valid?:#{v.valid?}"
-            puts "\tversion error:#{v.errors.messages}"
+            STDERR.puts "Unable to create a version with name '#{milestone_name}'!"
+            STDERR.puts "\tversion valid?:#{v.valid?}"
+            STDERR.puts "\tversion error:#{v.errors.messages}"
             next
           end
           version_map[milestone.name] = v
@@ -505,7 +506,8 @@ namespace :redmine do
         puts
 
         # Components
-        print "Migrating components"
+        puts "Migrating components"
+        STDERR.puts "Migrating components"
 
         component_project_name_map = {}
         if !@component_project_map_file.blank?
@@ -537,9 +539,9 @@ namespace :redmine do
                                     :name => @target_category_prefix + component_name
             end
             if !c.save
-              puts "Unable to create a category with name '#{category_name}'!"
-              puts "\tcategory valid?:#{c.valid?}"
-              puts "\tcategory error:#{c.errors.messages}"
+              STDERR.puts "Unable to create a category with name '#{category_name}'!"
+              STDERR.puts "\tcategory valid?:#{c.valid?}"
+              STDERR.puts "\tcategory error:#{c.errors.messages}"
               next
             end
             issues_category_submap[component.name] = c
@@ -551,7 +553,8 @@ namespace :redmine do
 
         # Custom fields
         # TODO: read trac.ini instead
-        print "Migrating custom fields"
+        puts "Migrating custom fields"
+        STDERR.puts "Migrating custom fields"
         custom_field_map = {}
         TracTicketCustom.find_by_sql("SELECT DISTINCT name FROM #{TracTicketCustom.table_name}").each do |field|
           print '.'
@@ -616,7 +619,8 @@ namespace :redmine do
 #puts "saving time"
 #if false
         # Tickets
-        print "Migrating tickets"
+        puts "Migrating tickets"
+        STDERR.puts "Migrating tickets"
         TracTicket.find_each(:batch_size => 200) do |ticket|
           print '.'
           STDOUT.flush
@@ -689,10 +693,10 @@ end
           # Attachments
           ticket.attachments.each do |attachment|
             if !attachment.exist?
-              puts " doesn't exist:" + attachment.filename + ':' + attachment.trac_fullpath
+              STDERR.puts " doesn't exist:" + attachment.filename + ':' + attachment.trac_fullpath
               next
             end
-            puts "#{i.id}+#{attachment.filename}"
+            STDERR.puts "#{i.id}+#{attachment.filename}"
             attachment.open {
               a = Attachment.new :created_on => attachment.time
               a.file = attachment
@@ -729,7 +733,8 @@ end
         puts
 
         # Wiki
-        print "Migrating wiki"
+        puts "Migrating wiki"
+        STDERR.puts "Migrating wiki"
         if wiki.save
           page_history = {}
           TracWikiPage.order('name, version').all.each do |page|
@@ -744,7 +749,7 @@ end
             if name_in_history.nil?
               page_history[titleized_name] = page.name
             elsif name_in_history != page.name
-              raise "name collision #{page.name}->#{titleized_name}<-#{name_in_history}"
+              STDERR.puts "name collision #{page.name}->#{titleized_name}<-#{name_in_history}"
             end
             p = wiki.find_or_new_page(page.name)
             p.content = WikiContent.new(:page => p) if p.new_record?
@@ -773,14 +778,14 @@ end
               sanitized_filename = sanitize_filename(attachment.filename)
               attachment_in_history = attachment_history[sanitized_filename]
               if attachment_in_history
-                raise "filename collision: #{attachment.filename}->#{sanitized_filename}<-#{attachment_in_history}"
+                STDERR.puts "filename collision: #{attachment.filename}->#{sanitized_filename}<-#{attachment_in_history}"
               end
               if p.attachments.find_by_filename(sanitized_filename) #add only once per page
                 print ">"
-                #puts "#{p.title}>#{attachment.filename}"
+                STDERR.puts "#{p.title}>#{attachment.filename}"
                 next
               end
-              puts "#{p.title}+#{attachment.filename}"
+              STDERR.puts "#{p.title}+#{attachment.filename}"
               attachment.open {
                 a = Attachment.new :created_on => attachment.time
                 a.file = attachment
@@ -788,9 +793,9 @@ end
                 a.description = attachment.description
                 a.container = p
                 if !a.save
-                  puts "Unable to create an attachment with file name '#{attachment.filename}'!"
-                  puts "\tvalid?:#{a.valid?}"
-                  puts "\terror:#{a.errors.messages}"
+                  STDERR.puts "Unable to create an attachment with file name '#{attachment.filename}'!"
+                  STDERR.puts "\tvalid?:#{a.valid?}"
+                  STDERR.puts "\terror:#{a.errors.messages}"
                 else
                   migrated_wiki_attachments += 1
                 end
@@ -808,12 +813,19 @@ end
 
         puts
         puts "Components:      #{migrated_components}/#{TracComponent.count}"
+        STDERR.puts "Components:      #{migrated_components}/#{TracComponent.count}"
         puts "Milestones:      #{migrated_milestones}/#{TracMilestone.count}"
+        STDERR.puts "Milestones:      #{migrated_milestones}/#{TracMilestone.count}"
         puts "Tickets:         #{migrated_tickets}/#{TracTicket.count}"
+        STDERR.puts "Tickets:         #{migrated_tickets}/#{TracTicket.count}"
         puts "Ticket files:    #{migrated_ticket_attachments}/" + TracAttachment.count(:conditions => {:type => 'ticket'}).to_s
+        STDERR.puts "Ticket files:    #{migrated_ticket_attachments}/" + TracAttachment.count(:conditions => {:type => 'ticket'}).to_s
         puts "Custom values:   #{migrated_custom_values}/#{TracTicketCustom.count}"
+        STDERR.puts "Custom values:   #{migrated_custom_values}/#{TracTicketCustom.count}"
         puts "Wiki edits:      #{migrated_wiki_edits}/#{wiki_edit_count}"
+        STDERR.puts "Wiki edits:      #{migrated_wiki_edits}/#{wiki_edit_count}"
         puts "Wiki files:      #{migrated_wiki_attachments}/" + TracAttachment.count(:conditions => {:type => 'wiki'}).to_s
+        STDERR.puts "Wiki files:      #{migrated_wiki_attachments}/" + TracAttachment.count(:conditions => {:type => 'wiki'}).to_s
       end
 
       def self.limit_for(klass, attribute)
@@ -839,7 +851,7 @@ end
         raise "#{trac_attachments_directory} doesn't exist!" unless File.directory?(trac_attachments_directory)
         @@trac_directory
       rescue Exception => e
-        puts e
+        STDERR.puts e
         return false
       end
 
@@ -854,7 +866,7 @@ end
         raise "#{trac_db_path} doesn't exist!" if %w(sqlite3).include?(adapter) && !File.exist?(trac_db_path)
         @@trac_adapter = adapter
       rescue Exception => e
-        puts e
+        STDERR.puts e
         return false
       end
 
@@ -942,9 +954,9 @@ end
                                 :description => ''
           project.identifier = identifier
           if !project.save
-            puts "Unable to create a project with identifier '#{identifier}'!"
-            puts "\tproject valid?:#{project.valid?}"
-            puts "\tproject error:#{project.errors.messages}"
+            STDERR.puts "Unable to create a project with identifier '#{identifier}'!"
+            STDERR.puts "\tproject valid?:#{project.valid?}"
+            STDERR.puts "\tproject error:#{project.errors.messages}"
           end
           # enable issues and wiki for the created project
           project.enabled_module_names = ['issue_tracking', 'wiki']
@@ -1002,10 +1014,10 @@ end
 
     puts
     if Redmine::DefaultData::Loader.no_data?
-      puts "Redmine configuration need to be loaded before importing data."
-      puts "Please, run this first:"
-      puts
-      puts "  rake redmine:load_default_data RAILS_ENV=\"#{ENV['RAILS_ENV']}\""
+      STDERR.puts "Redmine configuration need to be loaded before importing data."
+      STDERR.puts "Please, run this first:"
+      STDERR.puts
+      STDERR.puts "  rake redmine:load_default_data RAILS_ENV=\"#{ENV['RAILS_ENV']}\""
       exit
     end
 
