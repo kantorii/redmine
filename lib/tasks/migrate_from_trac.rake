@@ -335,6 +335,10 @@ namespace :redmine do
 
       # Basic wiki syntax conversion
       def self.convert_wiki_text(text)
+        unless @convert_wiki
+          return text
+        end
+        
         # Titles
         text = text.gsub(/^(\=+)\s(.+)\s(\=+)/) {|s| "\nh#{$1.length}. #{$2}\n"}
         # External Links
@@ -936,6 +940,10 @@ end
         @component_project_map_file = map_file
       end
 
+      def self.set_convert_wiki(convert_wiki)
+        @convert_wiki = convert_wiki
+      end
+
       def self.set_target_project_prefix(project_prefix)
         @target_project_prefix = project_prefix
       end
@@ -1044,6 +1052,26 @@ end
       end
     end
 
+    def promptBoolean(text, options = {}, &block)
+      default = options[:default]
+      while true
+        print "#{text} [" + (default.nil? ? "y/n" : (default ? "Y/n" : "y/N")) + "]: "
+        STDOUT.flush
+        value = STDIN.gets.chomp!
+        if (!default.nil? && value.blank?)
+          yield default
+        elsif value.match(/^y$/i)
+          yield true
+        elsif value.match(/^n$/i)
+          yield false
+        else
+          puts "Enter y or n!"
+          next
+        end
+        break
+      end
+    end
+
     DEFAULT_PORTS = {'mysql' => 3306, 'postgresql' => 5432}
 
     prompt('Trac directory') {|directory| TracMigrate.set_trac_directory directory.strip}
@@ -1060,6 +1088,7 @@ end
     prompt('Trac component>Redmine category map file (tab-delimited)', :default => nil) {|map_file| TracMigrate.set_component_map_file map_file}
     prompt('Trac milestone>Redmine project map file (tab-delimited)', :default => nil) {|map_file| TracMigrate.set_milestone_map_file map_file}
     prompt('Trac component>Redmine project map file (tab-delimited)', :default => nil) {|map_file| TracMigrate.set_component_project_map_file map_file}
+    promptBoolean('Try to convert wiki format?', :default => true) {|convert| TracMigrate.set_convert_wiki convert}
     puts 'For project identifiers: Only lower case letters (a-z), numbers, dashes and underscores are allowed, must start with a lower case letter.'
     target_project_identifer = ''
     prompt('Target project identifier (not prefixed)') do |identifier|
@@ -1071,30 +1100,12 @@ end
       defaultPrefix = prefix
       TracMigrate.set_target_field_name_prefix prefix
     end
-    print "Add prefix to resolution? [Y/n]"
-    prefix_resolution = STDIN.gets
-    if prefix_resolution.match(/^y?$/i)
-      TracMigrate.set_prefix_resolution true
-    elsif prefix_resolution.match(/^n$/i)
-      TracMigrate.set_prefix_resolution false
-    else
-      puts "Enter y or n!"
-      break
-    end
+    promptBoolean("Add prefix to resolution?", :default => true) {|prefix_resolution| TracMigrate.set_prefix_resolution prefix_resolution}
     defaultPrefix2 = ''
     prompt('Target field name for Trac ID (not prefixed)', :default => defaultPrefix + "id") {|target_trac_id_field_name| TracMigrate.set_target_trac_id_field_name target_trac_id_field_name}
     prompt('Redmine category prefix', :default => defaultPrefix2) {|target_category_prefix| TracMigrate.set_target_category_prefix target_category_prefix}
     prompt('Redmine project prefix', :default => defaultPrefix2) {|target_project_prefix| TracMigrate.set_target_project_prefix target_project_prefix}
-    print 'Humanize Redmine project? [Y/n]'
-    humanize_project = STDIN.gets
-    if humanize_project.match(/^y?$/i)
-      TracMigrate.set_humanize_project true
-    elsif humanize_project.match(/^n$/i)
-      TracMigrate.set_humanize_project false
-    else
-      puts "Enter y or n!"
-      break
-    end
+    promptBoolean('Humanize Redmine project?', :default => true) {|humanize_project| TracMigrate.set_humanize_project humanize_project}
     prompt('Redmine version prefix', :default => defaultPrefix2) {|target_version_prefix| TracMigrate.set_target_version_prefix target_version_prefix}
     prompt('Default password for users', :default => '') {|password| TracMigrate.set_default_password password}
                                                                                                                                        
